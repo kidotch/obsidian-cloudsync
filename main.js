@@ -181,6 +181,8 @@ var SyncEngine = class {
     this.remotePath = remotePath;
     this.debounceTimers = /* @__PURE__ */ new Map();
     this.debounceMs = 5e3;
+    // ダウンロード済みファイルのrevを記録（再ダウンロード防止）
+    this.syncedRevs = /* @__PURE__ */ new Map();
   }
   // ────────────────────────────────────────────
   // 起動時同期（Dropbox → ローカル）
@@ -194,9 +196,14 @@ var SyncEngine = class {
         const localPath = this.toLocalPath(remote.path);
         if (!localPath) continue;
         const localFile = this.app.vault.getAbstractFileByPath(localPath);
+        const syncedRev = this.syncedRevs.get(localPath);
+        if (syncedRev === remote.rev) continue;
         if (!localFile || await this.isRemoteNewer(localFile, remote)) {
           await this.downloadFile(remote.path, localPath);
+          this.syncedRevs.set(localPath, remote.rev);
           downloaded++;
+        } else {
+          this.syncedRevs.set(localPath, remote.rev);
         }
       }
       if (downloaded === 0) {

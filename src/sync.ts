@@ -9,6 +9,8 @@ import { DropboxClient, FileEntry } from "./dropbox";
 export class SyncEngine {
 	private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	private debounceMs = 5000;
+	// ダウンロード済みファイルのrevを記録（再ダウンロード防止）
+	private syncedRevs = new Map<string, string>();
 
 	constructor(
 		private app: App,
@@ -32,10 +34,17 @@ export class SyncEngine {
 
 				const localFile = this.app.vault.getAbstractFileByPath(localPath);
 
-				// ローカルにない、またはリモートの方が新しければダウンロード
+				// 同じrevなら既に同期済みなのでスキップ
+				const syncedRev = this.syncedRevs.get(localPath);
+				if (syncedRev === remote.rev) continue;
+
 				if (!localFile || await this.isRemoteNewer(localFile as TFile, remote)) {
 					await this.downloadFile(remote.path, localPath);
+					this.syncedRevs.set(localPath, remote.rev);
 					downloaded++;
+				} else {
+					// ローカルが最新でも rev を記録しておく
+					this.syncedRevs.set(localPath, remote.rev);
 				}
 			}
 
