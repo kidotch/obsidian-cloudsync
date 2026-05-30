@@ -187,8 +187,8 @@ var SyncEngine = class {
   // ────────────────────────────────────────────
   // 起動時同期（Dropbox → ローカル）
   // ────────────────────────────────────────────
-  async pullOnStartup() {
-    new import_obsidian2.Notice("CloudSync: \u540C\u671F\u4E2D...");
+  async pullOnStartup(retry = 0) {
+    new import_obsidian2.Notice("\u2601\uFE0F \u540C\u671F\u4E2D...");
     try {
       const remoteFiles = await this.dbx.listFiles();
       let downloaded = 0;
@@ -212,8 +212,13 @@ var SyncEngine = class {
         new import_obsidian2.Notice(`\u2601\uFE0F ${downloaded}\u4EF6\u306E\u30D5\u30A1\u30A4\u30EB\u3092\u66F4\u65B0\u3057\u307E\u3057\u305F`);
       }
     } catch (e) {
-      new import_obsidian2.Notice(`\u2601\uFE0F \u540C\u671F\u30A8\u30E9\u30FC: ${e.message}`);
-      console.error("CloudSync pull error:", e);
+      if (retry < 2) {
+        new import_obsidian2.Notice(`\u2601\uFE0F \u540C\u671F\u30EA\u30C8\u30E9\u30A4\u4E2D... (${retry + 1}/2)`);
+        setTimeout(() => this.pullOnStartup(retry + 1), 5e3);
+      } else {
+        new import_obsidian2.Notice(`\u2601\uFE0F \u540C\u671F\u30A8\u30E9\u30FC: ${e.message}`);
+        console.error("CloudSync pull error:", e);
+      }
     }
   }
   // ────────────────────────────────────────────
@@ -364,9 +369,9 @@ var CloudSyncPlugin = class extends import_obsidian4.Plugin {
     this.addSettingTab(new CloudSyncSettingTab(this.app, this));
     this.initClient();
     this.addRibbonIcon("cloud", "CloudSync: \u4ECA\u3059\u3050\u540C\u671F", () => this.syncNow());
-    this.app.workspace.onLayoutReady(async () => {
+    this.app.workspace.onLayoutReady(() => {
       if (this.isReady()) {
-        await this.engine.pullOnStartup();
+        setTimeout(() => this.engine.pullOnStartup(), 3e3);
       }
     });
     this.registerEvent(

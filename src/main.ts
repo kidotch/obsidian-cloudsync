@@ -16,10 +16,10 @@ export default class CloudSyncPlugin extends Plugin {
 		// リボンアイコン（3本線メニュー）
 		this.addRibbonIcon("cloud", "CloudSync: 今すぐ同期", () => this.syncNow());
 
-		// 起動時に同期
-		this.app.workspace.onLayoutReady(async () => {
+		// 起動時に同期（ネットワーク準備待ちで少し遅延）
+		this.app.workspace.onLayoutReady(() => {
 			if (this.isReady()) {
-				await this.engine.pullOnStartup();
+				setTimeout(() => this.engine.pullOnStartup(), 3000);
 			}
 		});
 

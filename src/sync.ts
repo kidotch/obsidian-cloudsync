@@ -22,8 +22,8 @@ export class SyncEngine {
 	// 起動時同期（Dropbox → ローカル）
 	// ────────────────────────────────────────────
 
-	async pullOnStartup(): Promise<void> {
-		new Notice("CloudSync: 同期中...");
+	async pullOnStartup(retry = 0): Promise<void> {
+		new Notice("☁️ 同期中...");
 		try {
 			const remoteFiles = await this.dbx.listFiles();
 			let downloaded = 0;
@@ -54,8 +54,14 @@ export class SyncEngine {
 				new Notice(`☁️ ${downloaded}件のファイルを更新しました`);
 			}
 		} catch (e) {
-			new Notice(`☁️ 同期エラー: ${e.message}`);
-			console.error("CloudSync pull error:", e);
+			if (retry < 2) {
+				// 最大2回リトライ（5秒後）
+				new Notice(`☁️ 同期リトライ中... (${retry + 1}/2)`);
+				setTimeout(() => this.pullOnStartup(retry + 1), 5000);
+			} else {
+				new Notice(`☁️ 同期エラー: ${e.message}`);
+				console.error("CloudSync pull error:", e);
+			}
 		}
 	}
 
