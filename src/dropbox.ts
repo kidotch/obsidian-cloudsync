@@ -32,17 +32,17 @@ export class DropboxClient {
 		if (this.accessToken && Date.now() < this.tokenExpiry) {
 			return this.accessToken;
 		}
+		const body = `grant_type=refresh_token&refresh_token=${encodeURIComponent(this.settings.refreshToken)}&client_id=${encodeURIComponent(this.settings.appKey)}&client_secret=${encodeURIComponent(this.settings.appSecret)}`;
 		const res = await requestUrl({
 			url: "https://api.dropbox.com/oauth2/token",
 			method: "POST",
 			headers: { "Content-Type": "application/x-www-form-urlencoded" },
-			body: new URLSearchParams({
-				grant_type: "refresh_token",
-				refresh_token: this.settings.refreshToken,
-				client_id: this.settings.appKey,
-				client_secret: this.settings.appSecret,
-			}).toString(),
+			body,
+			throw: false,
 		});
+		if (res.status !== 200) {
+			throw new Error(`Auth failed (${res.status}): ${res.text}`);
+		}
 		const data = res.json;
 		this.accessToken = data.access_token;
 		this.tokenExpiry = Date.now() + (data.expires_in - 60) * 1000;
@@ -67,17 +67,17 @@ export class DropboxClient {
 	}
 
 	async exchangeCode(code: string): Promise<string> {
+		const body = `code=${encodeURIComponent(code)}&grant_type=authorization_code&client_id=${encodeURIComponent(this.settings.appKey)}&client_secret=${encodeURIComponent(this.settings.appSecret)}`;
 		const res = await requestUrl({
 			url: "https://api.dropbox.com/oauth2/token",
 			method: "POST",
 			headers: { "Content-Type": "application/x-www-form-urlencoded" },
-			body: new URLSearchParams({
-				code,
-				grant_type: "authorization_code",
-				client_id: this.settings.appKey,
-				client_secret: this.settings.appSecret,
-			}).toString(),
+			body,
+			throw: false,
 		});
+		if (res.status !== 200) {
+			throw new Error(`Auth exchange failed (${res.status}): ${res.text}`);
+		}
 		return res.json.refresh_token;
 	}
 
