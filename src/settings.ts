@@ -6,6 +6,7 @@ export interface CloudSyncSettings {
 	appSecret: string;
 	refreshToken: string;
 	remotePath: string;
+	syncedRevs: Record<string, string>;
 }
 
 export const DEFAULT_SETTINGS: CloudSyncSettings = {
@@ -13,6 +14,7 @@ export const DEFAULT_SETTINGS: CloudSyncSettings = {
 	appSecret: "",
 	refreshToken: "",
 	remotePath: "/base",
+	syncedRevs: {},
 };
 
 export class CloudSyncSettingTab extends PluginSettingTab {

@@ -11,14 +11,22 @@ export class SyncEngine {
 	private debounceMs = 5000;
 	private syncedRevs = new Map<string, string>();
 	private downloading = new Set<string>();
-	// 起動同期が完了するまでユーザー編集イベントを無視
 	private startupDone = false;
 
 	constructor(
 		private app: App,
 		private dbx: DropboxClient,
-		private remotePath: string
+		private remotePath: string,
+		private onSaveRevs?: (revs: Record<string, string>) => void
 	) {}
+
+	loadRevs(revs: Record<string, string>) {
+		this.syncedRevs = new Map(Object.entries(revs ?? {}));
+	}
+
+	private saveRevs() {
+		this.onSaveRevs?.(Object.fromEntries(this.syncedRevs));
+	}
 
 	// ────────────────────────────────────────────
 	// 起動時同期（Dropbox → ローカル）
@@ -45,7 +53,6 @@ export class SyncEngine {
 					this.syncedRevs.set(localPath, remote.rev);
 					downloaded++;
 				} else {
-					// ローカルが最新でも rev を記録しておく
 					this.syncedRevs.set(localPath, remote.rev);
 				}
 			}
@@ -56,6 +63,7 @@ export class SyncEngine {
 				new Notice(`☁️ ${downloaded}件のファイルを更新しました`);
 			}
 			this.startupDone = true;
+			this.saveRevs();
 		} catch (e) {
 			if (retry < 2) {
 				new Notice(`☁️ 同期リトライ中... (${retry + 1}/2)`);

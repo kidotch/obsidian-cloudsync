@@ -175,16 +175,23 @@ var DropboxClient = class {
 // src/sync.ts
 var import_obsidian2 = require("obsidian");
 var SyncEngine = class {
-  constructor(app, dbx, remotePath) {
+  constructor(app, dbx, remotePath, onSaveRevs) {
     this.app = app;
     this.dbx = dbx;
     this.remotePath = remotePath;
+    this.onSaveRevs = onSaveRevs;
     this.debounceTimers = /* @__PURE__ */ new Map();
     this.debounceMs = 5e3;
     this.syncedRevs = /* @__PURE__ */ new Map();
     this.downloading = /* @__PURE__ */ new Set();
-    // 起動同期が完了するまでユーザー編集イベントを無視
     this.startupDone = false;
+  }
+  loadRevs(revs) {
+    this.syncedRevs = new Map(Object.entries(revs != null ? revs : {}));
+  }
+  saveRevs() {
+    var _a;
+    (_a = this.onSaveRevs) == null ? void 0 : _a.call(this, Object.fromEntries(this.syncedRevs));
   }
   // ────────────────────────────────────────────
   // 起動時同期（Dropbox → ローカル）
@@ -214,6 +221,7 @@ var SyncEngine = class {
         new import_obsidian2.Notice(`\u2601\uFE0F ${downloaded}\u4EF6\u306E\u30D5\u30A1\u30A4\u30EB\u3092\u66F4\u65B0\u3057\u307E\u3057\u305F`);
       }
       this.startupDone = true;
+      this.saveRevs();
     } catch (e) {
       if (retry < 2) {
         new import_obsidian2.Notice(`\u2601\uFE0F \u540C\u671F\u30EA\u30C8\u30E9\u30A4\u4E2D... (${retry + 1}/2)`);
@@ -318,7 +326,8 @@ var DEFAULT_SETTINGS = {
   appKey: "",
   appSecret: "",
   refreshToken: "",
-  remotePath: "/base"
+  remotePath: "/base",
+  syncedRevs: {}
 };
 var CloudSyncSettingTab = class extends import_obsidian3.PluginSettingTab {
   constructor(app, plugin) {
@@ -440,6 +449,7 @@ var CloudSyncPlugin = class extends import_obsidian4.Plugin {
     return !!(this.settings.appKey && this.settings.appSecret && this.settings.refreshToken);
   }
   initClient() {
+    var _a;
     this.client = new DropboxClient({
       appKey: this.settings.appKey,
       appSecret: this.settings.appSecret,
@@ -449,8 +459,13 @@ var CloudSyncPlugin = class extends import_obsidian4.Plugin {
     this.engine = new SyncEngine(
       this.app,
       this.client,
-      this.settings.remotePath
+      this.settings.remotePath,
+      async (revs) => {
+        this.settings.syncedRevs = revs;
+        await this.saveData(this.settings);
+      }
     );
+    this.engine.loadRevs((_a = this.settings.syncedRevs) != null ? _a : {});
   }
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());

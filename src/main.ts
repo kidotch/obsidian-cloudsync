@@ -102,8 +102,13 @@ export default class CloudSyncPlugin extends Plugin {
 		this.engine = new SyncEngine(
 			this.app,
 			this.client,
-			this.settings.remotePath
+			this.settings.remotePath,
+			async (revs) => {
+				this.settings.syncedRevs = revs;
+				await this.saveData(this.settings);
+			}
 		);
+		this.engine.loadRevs(this.settings.syncedRevs ?? {});
 	}
 
 	async loadSettings() {
