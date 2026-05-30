@@ -181,8 +181,9 @@ var SyncEngine = class {
     this.remotePath = remotePath;
     this.debounceTimers = /* @__PURE__ */ new Map();
     this.debounceMs = 5e3;
-    // ダウンロード済みファイルのrevを記録（再ダウンロード防止）
     this.syncedRevs = /* @__PURE__ */ new Map();
+    // ダウンロード中のファイル（アップロードをスキップ）
+    this.downloading = /* @__PURE__ */ new Set();
   }
   // ────────────────────────────────────────────
   // 起動時同期（Dropbox → ローカル）
@@ -226,6 +227,7 @@ var SyncEngine = class {
   // ────────────────────────────────────────────
   scheduleUpload(file) {
     if (file.path.startsWith(".obsidian/")) return;
+    if (this.downloading.has(file.path)) return;
     const existing = this.debounceTimers.get(file.path);
     if (existing) clearTimeout(existing);
     const timer = setTimeout(() => {
@@ -276,13 +278,18 @@ var SyncEngine = class {
     await this.dbx.upload(remotePath, content);
   }
   async downloadFile(remotePath, localPath) {
-    const content = await this.dbx.download(remotePath);
-    const dir = localPath.substring(0, localPath.lastIndexOf("/"));
-    if (dir) {
-      await this.app.vault.adapter.mkdir(dir).catch(() => {
-      });
+    this.downloading.add(localPath);
+    try {
+      const content = await this.dbx.download(remotePath);
+      const dir = localPath.substring(0, localPath.lastIndexOf("/"));
+      if (dir) {
+        await this.app.vault.adapter.mkdir(dir).catch(() => {
+        });
+      }
+      await this.app.vault.adapter.writeBinary(localPath, content);
+    } finally {
+      setTimeout(() => this.downloading.delete(localPath), 3e3);
     }
-    await this.app.vault.adapter.writeBinary(localPath, content);
   }
   async isRemoteNewer(local, remote) {
     const remoteMs = new Date(remote.serverModified).getTime();

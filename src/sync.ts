@@ -9,8 +9,9 @@ import { DropboxClient, FileEntry } from "./dropbox";
 export class SyncEngine {
 	private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	private debounceMs = 5000;
-	// ダウンロード済みファイルのrevを記録（再ダウンロード防止）
 	private syncedRevs = new Map<string, string>();
+	// ダウンロード中のファイル（アップロードをスキップ）
+	private downloading = new Set<string>();
 
 	constructor(
 		private app: App,
@@ -70,8 +71,9 @@ export class SyncEngine {
 	// ────────────────────────────────────────────
 
 	scheduleUpload(file: TFile): void {
-		// .obsidian/ は同期しない
 		if (file.path.startsWith(".obsidian/")) return;
+		// ダウンロード中のファイルはアップロードしない
+		if (this.downloading.has(file.path)) return;
 		const existing = this.debounceTimers.get(file.path);
 		if (existing) clearTimeout(existing);
 
@@ -132,12 +134,18 @@ export class SyncEngine {
 	}
 
 	private async downloadFile(remotePath: string, localPath: string): Promise<void> {
-		const content = await this.dbx.download(remotePath);
-		const dir = localPath.substring(0, localPath.lastIndexOf("/"));
-		if (dir) {
-			await this.app.vault.adapter.mkdir(dir).catch(() => {});
+		this.downloading.add(localPath);
+		try {
+			const content = await this.dbx.download(remotePath);
+			const dir = localPath.substring(0, localPath.lastIndexOf("/"));
+			if (dir) {
+				await this.app.vault.adapter.mkdir(dir).catch(() => {});
+			}
+			await this.app.vault.adapter.writeBinary(localPath, content);
+		} finally {
+			// 少し待ってからフラグを解除（vaultイベントが落ち着くまで）
+			setTimeout(() => this.downloading.delete(localPath), 3000);
 		}
-		await this.app.vault.adapter.writeBinary(localPath, content);
 	}
 
 	private async isRemoteNewer(local: TFile, remote: FileEntry): Promise<boolean> {
