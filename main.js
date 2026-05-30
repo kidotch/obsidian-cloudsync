@@ -185,6 +185,7 @@ var SyncEngine = class {
     this.syncedRevs = /* @__PURE__ */ new Map();
     this.downloading = /* @__PURE__ */ new Set();
     this.startupDone = false;
+    this.ignorePatterns = [];
   }
   loadRevs(revs) {
     this.syncedRevs = new Map(Object.entries(revs != null ? revs : {}));
@@ -192,6 +193,14 @@ var SyncEngine = class {
   saveRevs() {
     var _a;
     (_a = this.onSaveRevs) == null ? void 0 : _a.call(this, Object.fromEntries(this.syncedRevs));
+  }
+  async loadIgnoreFile() {
+    try {
+      const content = await this.app.vault.adapter.read(".cloudsync_ignore");
+      this.ignorePatterns = content.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+    } catch (e) {
+      this.ignorePatterns = [];
+    }
   }
   // ────────────────────────────────────────────
   // 起動時同期（Dropbox → ローカル）
@@ -237,12 +246,15 @@ var SyncEngine = class {
   // 編集時アップロード（デバウンス付き）
   // ────────────────────────────────────────────
   isExcluded(path) {
-    return [
-      ".obsidian/workspace.json",
-      ".obsidian/workspace-mobile.json",
-      ".obsidian/plugins/cloudsync/data.json",
-      ".obsidian/community-plugins.json"
-    ].includes(path);
+    for (const pattern of this.ignorePatterns) {
+      if (pattern.endsWith("/") && path.startsWith(pattern)) return true;
+      if (pattern.includes("*")) {
+        const re = new RegExp("^" + pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$");
+        if (re.test(path)) return true;
+      }
+      if (path === pattern) return true;
+    }
+    return false;
   }
   scheduleUpload(file) {
     if (!this.startupDone) return;
@@ -409,7 +421,10 @@ var CloudSyncPlugin = class extends import_obsidian4.Plugin {
     this.addRibbonIcon("cloud", "CloudSync: \u4ECA\u3059\u3050\u540C\u671F", () => this.syncNow());
     this.app.workspace.onLayoutReady(() => {
       if (this.isReady()) {
-        setTimeout(() => this.engine.pullOnStartup(), 3e3);
+        setTimeout(async () => {
+          await this.engine.loadIgnoreFile();
+          await this.engine.pullOnStartup();
+        }, 3e3);
       }
     });
     this.registerEvent(

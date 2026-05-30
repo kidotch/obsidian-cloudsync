@@ -25,7 +25,10 @@ export default class CloudSyncPlugin extends Plugin {
 		// 起動時に同期（ネットワーク準備待ちで少し遅延）
 		this.app.workspace.onLayoutReady(() => {
 			if (this.isReady()) {
-				setTimeout(() => this.engine.pullOnStartup(), 3000);
+				setTimeout(async () => {
+					await this.engine.loadIgnoreFile();
+					await this.engine.pullOnStartup();
+				}, 3000);
 			}
 		});
 

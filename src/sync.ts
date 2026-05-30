@@ -12,6 +12,7 @@ export class SyncEngine {
 	private syncedRevs = new Map<string, string>();
 	private downloading = new Set<string>();
 	private startupDone = false;
+	private ignorePatterns: string[] = [];
 
 	constructor(
 		private app: App,
@@ -26,6 +27,17 @@ export class SyncEngine {
 
 	private saveRevs() {
 		this.onSaveRevs?.(Object.fromEntries(this.syncedRevs));
+	}
+
+	async loadIgnoreFile(): Promise<void> {
+		try {
+			const content = await this.app.vault.adapter.read(".cloudsync_ignore");
+			this.ignorePatterns = content.split("\n")
+				.map(l => l.trim())
+				.filter(l => l && !l.startsWith("#"));
+		} catch {
+			this.ignorePatterns = [];
+		}
 	}
 
 	// ────────────────────────────────────────────
@@ -81,12 +93,15 @@ export class SyncEngine {
 	// ────────────────────────────────────────────
 
 	private isExcluded(path: string): boolean {
-		return [
-			".obsidian/workspace.json",
-			".obsidian/workspace-mobile.json",
-			".obsidian/plugins/cloudsync/data.json",
-			".obsidian/community-plugins.json",
-		].includes(path);
+		for (const pattern of this.ignorePatterns) {
+			if (pattern.endsWith("/") && path.startsWith(pattern)) return true;
+			if (pattern.includes("*")) {
+				const re = new RegExp("^" + pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$");
+				if (re.test(path)) return true;
+			}
+			if (path === pattern) return true;
+		}
+		return false;
 	}
 
 	scheduleUpload(file: TFile): void {
