@@ -295,7 +295,9 @@ var SyncEngine = class {
   toLocalPath(remotePath) {
     const prefix = this.remotePath.toLowerCase().replace(/\/$/, "") + "/";
     if (!remotePath.toLowerCase().startsWith(prefix)) return null;
-    return remotePath.substring(prefix.length);
+    const rel = remotePath.substring(prefix.length);
+    if (rel.startsWith(".obsidian/")) return null;
+    return rel;
   }
 };
 

@@ -154,6 +154,9 @@ export class SyncEngine {
 	private toLocalPath(remotePath: string): string | null {
 		const prefix = this.remotePath.toLowerCase().replace(/\/$/, "") + "/";
 		if (!remotePath.toLowerCase().startsWith(prefix)) return null;
-		return remotePath.substring(prefix.length);
+		const rel = remotePath.substring(prefix.length);
+		// .obsidian/ はダウンロードしない（デバイス固有の設定を守る）
+		if (rel.startsWith(".obsidian/")) return null;
+		return rel;
 	}
 }
