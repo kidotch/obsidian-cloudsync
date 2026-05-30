@@ -85,6 +85,7 @@ export class SyncEngine {
 			".obsidian/workspace.json",
 			".obsidian/workspace-mobile.json",
 			".obsidian/plugins/cloudsync/data.json",
+			".obsidian/community-plugins.json",
 		].includes(path);
 	}
 
