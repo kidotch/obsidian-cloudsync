@@ -337,6 +337,7 @@ var CloudSyncPlugin = class extends import_obsidian4.Plugin {
     await this.loadSettings();
     this.addSettingTab(new CloudSyncSettingTab(this.app, this));
     this.initClient();
+    this.addRibbonIcon("cloud", "CloudSync: \u4ECA\u3059\u3050\u540C\u671F", () => this.syncNow());
     this.app.workspace.onLayoutReady(async () => {
       if (this.isReady()) {
         await this.engine.pullOnStartup();

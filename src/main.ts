@@ -13,6 +13,9 @@ export default class CloudSyncPlugin extends Plugin {
 		this.addSettingTab(new CloudSyncSettingTab(this.app, this));
 		this.initClient();
 
+		// リボンアイコン（3本線メニュー）
+		this.addRibbonIcon("cloud", "CloudSync: 今すぐ同期", () => this.syncNow());
+
 		// 起動時に同期
 		this.app.workspace.onLayoutReady(async () => {
 			if (this.isReady()) {
