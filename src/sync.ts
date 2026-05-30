@@ -10,8 +10,9 @@ export class SyncEngine {
 	private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	private debounceMs = 5000;
 	private syncedRevs = new Map<string, string>();
-	// ダウンロード中のファイル（アップロードをスキップ）
 	private downloading = new Set<string>();
+	// 起動同期が完了するまでユーザー編集イベントを無視
+	private startupDone = false;
 
 	constructor(
 		private app: App,
@@ -54,12 +55,13 @@ export class SyncEngine {
 			} else {
 				new Notice(`☁️ ${downloaded}件のファイルを更新しました`);
 			}
+			this.startupDone = true;
 		} catch (e) {
 			if (retry < 2) {
-				// 最大2回リトライ（5秒後）
 				new Notice(`☁️ 同期リトライ中... (${retry + 1}/2)`);
 				setTimeout(() => this.pullOnStartup(retry + 1), 5000);
 			} else {
+				this.startupDone = true;  // エラーでも編集は受け付ける
 				new Notice(`☁️ 同期エラー: ${e.message}`);
 				console.error("CloudSync pull error:", e);
 			}
@@ -71,8 +73,8 @@ export class SyncEngine {
 	// ────────────────────────────────────────────
 
 	scheduleUpload(file: TFile): void {
+		if (!this.startupDone) return;  // 起動同期完了前は無視
 		if (file.path.startsWith(".obsidian/")) return;
-		// ダウンロード中のファイルはアップロードしない
 		if (this.downloading.has(file.path)) return;
 		const existing = this.debounceTimers.get(file.path);
 		if (existing) clearTimeout(existing);

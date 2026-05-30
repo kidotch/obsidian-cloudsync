@@ -182,8 +182,9 @@ var SyncEngine = class {
     this.debounceTimers = /* @__PURE__ */ new Map();
     this.debounceMs = 5e3;
     this.syncedRevs = /* @__PURE__ */ new Map();
-    // ダウンロード中のファイル（アップロードをスキップ）
     this.downloading = /* @__PURE__ */ new Set();
+    // 起動同期が完了するまでユーザー編集イベントを無視
+    this.startupDone = false;
   }
   // ────────────────────────────────────────────
   // 起動時同期（Dropbox → ローカル）
@@ -212,11 +213,13 @@ var SyncEngine = class {
       } else {
         new import_obsidian2.Notice(`\u2601\uFE0F ${downloaded}\u4EF6\u306E\u30D5\u30A1\u30A4\u30EB\u3092\u66F4\u65B0\u3057\u307E\u3057\u305F`);
       }
+      this.startupDone = true;
     } catch (e) {
       if (retry < 2) {
         new import_obsidian2.Notice(`\u2601\uFE0F \u540C\u671F\u30EA\u30C8\u30E9\u30A4\u4E2D... (${retry + 1}/2)`);
         setTimeout(() => this.pullOnStartup(retry + 1), 5e3);
       } else {
+        this.startupDone = true;
         new import_obsidian2.Notice(`\u2601\uFE0F \u540C\u671F\u30A8\u30E9\u30FC: ${e.message}`);
         console.error("CloudSync pull error:", e);
       }
@@ -226,6 +229,7 @@ var SyncEngine = class {
   // 編集時アップロード（デバウンス付き）
   // ────────────────────────────────────────────
   scheduleUpload(file) {
+    if (!this.startupDone) return;
     if (file.path.startsWith(".obsidian/")) return;
     if (this.downloading.has(file.path)) return;
     const existing = this.debounceTimers.get(file.path);
