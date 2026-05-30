@@ -64,6 +64,17 @@ export class SyncEngine {
 		this.debounceTimers.set(file.path, timer);
 	}
 
+	// デバウンス中の全ファイルを即時アップロード（終了時用）
+	async flushPending(): Promise<void> {
+		const paths = [...this.debounceTimers.keys()];
+		for (const path of paths) {
+			clearTimeout(this.debounceTimers.get(path));
+			this.debounceTimers.delete(path);
+			const file = this.app.vault.getAbstractFileByPath(path) as TFile;
+			if (file) await this.uploadFile(file).catch(console.error);
+		}
+	}
+
 	// 削除をDropboxに反映
 	async handleDelete(path: string): Promise<void> {
 		const remotePath = this.toRemotePath(path);

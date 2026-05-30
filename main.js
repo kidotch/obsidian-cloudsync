@@ -219,6 +219,16 @@ var SyncEngine = class {
     }, this.debounceMs);
     this.debounceTimers.set(file.path, timer);
   }
+  // デバウンス中の全ファイルを即時アップロード（終了時用）
+  async flushPending() {
+    const paths = [...this.debounceTimers.keys()];
+    for (const path of paths) {
+      clearTimeout(this.debounceTimers.get(path));
+      this.debounceTimers.delete(path);
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (file) await this.uploadFile(file).catch(console.error);
+    }
+  }
   // 削除をDropboxに反映
   async handleDelete(path) {
     const remotePath = this.toRemotePath(path);
@@ -368,6 +378,11 @@ var CloudSyncPlugin = class extends import_obsidian4.Plugin {
       name: "\u4ECA\u3059\u3050\u540C\u671F",
       callback: () => this.syncNow()
     });
+  }
+  async onunload() {
+    if (this.isReady()) {
+      await this.engine.flushPending();
+    }
   }
   getClient() {
     return this.client;

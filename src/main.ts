@@ -59,6 +59,13 @@ export default class CloudSyncPlugin extends Plugin {
 		});
 	}
 
+	async onunload() {
+		// 閉じる前にデバウンス中のアップロードを即時実行
+		if (this.isReady()) {
+			await this.engine.flushPending();
+		}
+	}
+
 	getClient(): DropboxClient {
 		return this.client;
 	}
