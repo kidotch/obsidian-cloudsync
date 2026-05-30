@@ -1,0 +1,101 @@
+import { Notice, Plugin } from "obsidian";
+import { DropboxClient } from "./dropbox";
+import { SyncEngine } from "./sync";
+import { CloudSyncSettingTab, CloudSyncSettings, DEFAULT_SETTINGS } from "./settings";
+
+export default class CloudSyncPlugin extends Plugin {
+	settings: CloudSyncSettings;
+	private client: DropboxClient;
+	private engine: SyncEngine;
+
+	async onload() {
+		await this.loadSettings();
+		this.addSettingTab(new CloudSyncSettingTab(this.app, this));
+		this.initClient();
+
+		// 起動時に同期
+		this.app.workspace.onLayoutReady(async () => {
+			if (this.isReady()) {
+				await this.engine.pullOnStartup();
+			}
+		});
+
+		// ファイル編集時にアップロード
+		this.registerEvent(
+			this.app.vault.on("modify", file => {
+				if (this.isReady()) this.engine.scheduleUpload(file as any);
+			})
+		);
+
+		// ファイル作成時にアップロード
+		this.registerEvent(
+			this.app.vault.on("create", file => {
+				if (this.isReady()) this.engine.scheduleUpload(file as any);
+			})
+		);
+
+		// ファイル削除時にDropboxからも削除
+		this.registerEvent(
+			this.app.vault.on("delete", file => {
+				if (this.isReady()) this.engine.handleDelete(file.path);
+			})
+		);
+
+		// ファイル名変更・移動時
+		this.registerEvent(
+			this.app.vault.on("rename", (file, oldPath) => {
+				if (this.isReady()) this.engine.handleRename(file as any, oldPath);
+			})
+		);
+
+		// コマンド：手動同期
+		this.addCommand({
+			id: "sync-now",
+			name: "今すぐ同期",
+			callback: () => this.syncNow(),
+		});
+	}
+
+	getClient(): DropboxClient {
+		return this.client;
+	}
+
+	async syncNow(): Promise<void> {
+		if (!this.isReady()) {
+			new Notice("CloudSync: 設定を完了してください");
+			return;
+		}
+		await this.engine.pullOnStartup();
+	}
+
+	private isReady(): boolean {
+		return !!(
+			this.settings.appKey &&
+			this.settings.appSecret &&
+			this.settings.refreshToken
+		);
+	}
+
+	private initClient(): void {
+		this.client = new DropboxClient({
+			appKey: this.settings.appKey,
+			appSecret: this.settings.appSecret,
+			refreshToken: this.settings.refreshToken,
+			remotePath: this.settings.remotePath,
+		});
+		this.engine = new SyncEngine(
+			this.app,
+			this.client,
+			this.settings.remotePath
+		);
+	}
+
+	async loadSettings() {
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+	}
+
+	async saveSettings() {
+		await this.saveData(this.settings);
+		this.initClient();
+	}
+}
