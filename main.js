@@ -26,6 +26,12 @@ var import_obsidian4 = require("obsidian");
 
 // src/dropbox.ts
 var import_obsidian = require("obsidian");
+function escapeForHeader(obj) {
+  return JSON.stringify(obj).replace(
+    /[^\x00-\x7F]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`
+  );
+}
 var DropboxClient = class {
   constructor(settings) {
     this.settings = settings;
@@ -127,7 +133,7 @@ var DropboxClient = class {
       headers: {
         ...headers,
         "Content-Type": "application/octet-stream",
-        "Dropbox-API-Arg": JSON.stringify({
+        "Dropbox-API-Arg": escapeForHeader({
           path: remotePath,
           mode: "overwrite",
           autorename: false
@@ -147,7 +153,7 @@ var DropboxClient = class {
       method: "POST",
       headers: {
         ...headers,
-        "Dropbox-API-Arg": JSON.stringify({ path: remotePath })
+        "Dropbox-API-Arg": escapeForHeader({ path: remotePath })
       }
     });
     return res.arrayBuffer;

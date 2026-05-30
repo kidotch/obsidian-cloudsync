@@ -18,6 +18,13 @@ export interface FileEntry {
 	size: number;
 }
 
+// HTTPヘッダー用に非ASCII文字をUnicodeエスケープ
+function escapeForHeader(obj: object): string {
+	return JSON.stringify(obj).replace(/[^\x00-\x7F]/g, c =>
+		`\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`
+	);
+}
+
 export class DropboxClient {
 	private accessToken = "";
 	private tokenExpiry = 0;
@@ -130,7 +137,7 @@ export class DropboxClient {
 			headers: {
 				...headers,
 				"Content-Type": "application/octet-stream",
-				"Dropbox-API-Arg": JSON.stringify({
+				"Dropbox-API-Arg": escapeForHeader({
 					path: remotePath,
 					mode: "overwrite",
 					autorename: false,
@@ -152,7 +159,7 @@ export class DropboxClient {
 			method: "POST",
 			headers: {
 				...headers,
-				"Dropbox-API-Arg": JSON.stringify({ path: remotePath }),
+				"Dropbox-API-Arg": escapeForHeader({ path: remotePath }),
 			},
 		});
 		return res.arrayBuffer;
