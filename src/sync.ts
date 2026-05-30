@@ -39,9 +39,13 @@ export class SyncEngine {
 				}
 			}
 
-			new Notice(`CloudSync: 同期完了（${downloaded}件更新）`);
+			if (downloaded === 0) {
+				new Notice("☁️ 最新の状態です");
+			} else {
+				new Notice(`☁️ ${downloaded}件のファイルを更新しました`);
+			}
 		} catch (e) {
-			new Notice(`CloudSync: 同期エラー: ${e.message}`);
+			new Notice(`☁️ 同期エラー: ${e.message}`);
 			console.error("CloudSync pull error:", e);
 		}
 	}
@@ -56,9 +60,13 @@ export class SyncEngine {
 
 		const timer = setTimeout(() => {
 			this.debounceTimers.delete(file.path);
-			this.uploadFile(file).catch(e =>
-				console.error(`CloudSync upload error (${file.path}):`, e)
-			);
+			const name = file.name;
+			this.uploadFile(file)
+				.then(() => new Notice(`☁️ ${name} をアップロードしました`))
+				.catch(e => {
+					new Notice(`CloudSync: アップロード失敗 (${name}): ${e.message}`);
+					console.error(`CloudSync upload error (${file.path}):`, e);
+				});
 		}, this.debounceMs);
 
 		this.debounceTimers.set(file.path, timer);
@@ -67,12 +75,15 @@ export class SyncEngine {
 	// デバウンス中の全ファイルを即時アップロード（終了時用）
 	async flushPending(): Promise<void> {
 		const paths = [...this.debounceTimers.keys()];
+		if (paths.length === 0) return;
+		new Notice(`☁️ ${paths.length}件を保存中...`);
 		for (const path of paths) {
 			clearTimeout(this.debounceTimers.get(path));
 			this.debounceTimers.delete(path);
 			const file = this.app.vault.getAbstractFileByPath(path) as TFile;
 			if (file) await this.uploadFile(file).catch(console.error);
 		}
+		new Notice("☁️ 保存完了");
 	}
 
 	// 削除をDropboxに反映

@@ -199,9 +199,13 @@ var SyncEngine = class {
           downloaded++;
         }
       }
-      new import_obsidian2.Notice(`CloudSync: \u540C\u671F\u5B8C\u4E86\uFF08${downloaded}\u4EF6\u66F4\u65B0\uFF09`);
+      if (downloaded === 0) {
+        new import_obsidian2.Notice("\u2601\uFE0F \u6700\u65B0\u306E\u72B6\u614B\u3067\u3059");
+      } else {
+        new import_obsidian2.Notice(`\u2601\uFE0F ${downloaded}\u4EF6\u306E\u30D5\u30A1\u30A4\u30EB\u3092\u66F4\u65B0\u3057\u307E\u3057\u305F`);
+      }
     } catch (e) {
-      new import_obsidian2.Notice(`CloudSync: \u540C\u671F\u30A8\u30E9\u30FC: ${e.message}`);
+      new import_obsidian2.Notice(`\u2601\uFE0F \u540C\u671F\u30A8\u30E9\u30FC: ${e.message}`);
       console.error("CloudSync pull error:", e);
     }
   }
@@ -213,21 +217,26 @@ var SyncEngine = class {
     if (existing) clearTimeout(existing);
     const timer = setTimeout(() => {
       this.debounceTimers.delete(file.path);
-      this.uploadFile(file).catch(
-        (e) => console.error(`CloudSync upload error (${file.path}):`, e)
-      );
+      const name = file.name;
+      this.uploadFile(file).then(() => new import_obsidian2.Notice(`\u2601\uFE0F ${name} \u3092\u30A2\u30C3\u30D7\u30ED\u30FC\u30C9\u3057\u307E\u3057\u305F`)).catch((e) => {
+        new import_obsidian2.Notice(`CloudSync: \u30A2\u30C3\u30D7\u30ED\u30FC\u30C9\u5931\u6557 (${name}): ${e.message}`);
+        console.error(`CloudSync upload error (${file.path}):`, e);
+      });
     }, this.debounceMs);
     this.debounceTimers.set(file.path, timer);
   }
   // デバウンス中の全ファイルを即時アップロード（終了時用）
   async flushPending() {
     const paths = [...this.debounceTimers.keys()];
+    if (paths.length === 0) return;
+    new import_obsidian2.Notice(`\u2601\uFE0F ${paths.length}\u4EF6\u3092\u4FDD\u5B58\u4E2D...`);
     for (const path of paths) {
       clearTimeout(this.debounceTimers.get(path));
       this.debounceTimers.delete(path);
       const file = this.app.vault.getAbstractFileByPath(path);
       if (file) await this.uploadFile(file).catch(console.error);
     }
+    new import_obsidian2.Notice("\u2601\uFE0F \u4FDD\u5B58\u5B8C\u4E86");
   }
   // 削除をDropboxに反映
   async handleDelete(path) {
