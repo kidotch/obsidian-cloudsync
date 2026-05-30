@@ -236,9 +236,16 @@ var SyncEngine = class {
   // ────────────────────────────────────────────
   // 編集時アップロード（デバウンス付き）
   // ────────────────────────────────────────────
+  isExcluded(path) {
+    return [
+      ".obsidian/workspace.json",
+      ".obsidian/workspace-mobile.json",
+      ".obsidian/plugins/cloudsync/data.json"
+    ].includes(path);
+  }
   scheduleUpload(file) {
     if (!this.startupDone) return;
-    if (file.path.startsWith(".obsidian/")) return;
+    if (this.isExcluded(file.path)) return;
     if (this.downloading.has(file.path)) return;
     const existing = this.debounceTimers.get(file.path);
     if (existing) clearTimeout(existing);
@@ -308,14 +315,14 @@ var SyncEngine = class {
     return remoteMs > local.stat.mtime;
   }
   toRemotePath(localPath) {
-    if (localPath.startsWith(".obsidian/")) return null;
+    if (this.isExcluded(localPath)) return null;
     return this.remotePath.replace(/\/$/, "") + "/" + localPath;
   }
   toLocalPath(remotePath) {
     const prefix = this.remotePath.toLowerCase().replace(/\/$/, "") + "/";
     if (!remotePath.toLowerCase().startsWith(prefix)) return null;
     const rel = remotePath.substring(prefix.length);
-    if (rel.startsWith(".obsidian/")) return null;
+    if (this.isExcluded(rel)) return null;
     return rel;
   }
 };
