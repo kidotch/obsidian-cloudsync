@@ -9,9 +9,15 @@ export default class CloudSyncPlugin extends Plugin {
 	private engine: SyncEngine;
 
 	async onload() {
+		try {
 		await this.loadSettings();
 		this.addSettingTab(new CloudSyncSettingTab(this.app, this));
 		this.initClient();
+		} catch(e) {
+			new Notice(`CloudSync 初期化エラー: ${e.message}`);
+			console.error("CloudSync onload error:", e);
+			return;
+		}
 
 		// リボンアイコン（3本線メニュー）
 		this.addRibbonIcon("cloud", "CloudSync: 今すぐ同期", () => this.syncNow());

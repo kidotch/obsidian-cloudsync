@@ -70,6 +70,8 @@ export class SyncEngine {
 	// ────────────────────────────────────────────
 
 	scheduleUpload(file: TFile): void {
+		// .obsidian/ は同期しない
+		if (file.path.startsWith(".obsidian/")) return;
 		const existing = this.debounceTimers.get(file.path);
 		if (existing) clearTimeout(existing);
 
@@ -143,7 +145,9 @@ export class SyncEngine {
 		return remoteMs > local.stat.mtime;
 	}
 
-	private toRemotePath(localPath: string): string {
+	private toRemotePath(localPath: string): string | null {
+		// .obsidian/ は同期しない（デバイス固有の設定・トークンを守る）
+		if (localPath.startsWith(".obsidian/")) return null;
 		return this.remotePath.replace(/\/$/, "") + "/" + localPath;
 	}
 

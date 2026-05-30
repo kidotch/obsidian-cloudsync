@@ -225,6 +225,7 @@ var SyncEngine = class {
   // 編集時アップロード（デバウンス付き）
   // ────────────────────────────────────────────
   scheduleUpload(file) {
+    if (file.path.startsWith(".obsidian/")) return;
     const existing = this.debounceTimers.get(file.path);
     if (existing) clearTimeout(existing);
     const timer = setTimeout(() => {
@@ -288,6 +289,7 @@ var SyncEngine = class {
     return remoteMs > local.stat.mtime;
   }
   toRemotePath(localPath) {
+    if (localPath.startsWith(".obsidian/")) return null;
     return this.remotePath.replace(/\/$/, "") + "/" + localPath;
   }
   toLocalPath(remotePath) {
@@ -365,9 +367,15 @@ var CloudSyncSettingTab = class extends import_obsidian3.PluginSettingTab {
 // src/main.ts
 var CloudSyncPlugin = class extends import_obsidian4.Plugin {
   async onload() {
-    await this.loadSettings();
-    this.addSettingTab(new CloudSyncSettingTab(this.app, this));
-    this.initClient();
+    try {
+      await this.loadSettings();
+      this.addSettingTab(new CloudSyncSettingTab(this.app, this));
+      this.initClient();
+    } catch (e) {
+      new import_obsidian4.Notice(`CloudSync \u521D\u671F\u5316\u30A8\u30E9\u30FC: ${e.message}`);
+      console.error("CloudSync onload error:", e);
+      return;
+    }
     this.addRibbonIcon("cloud", "CloudSync: \u4ECA\u3059\u3050\u540C\u671F", () => this.syncNow());
     this.app.workspace.onLayoutReady(() => {
       if (this.isReady()) {
