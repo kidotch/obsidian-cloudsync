@@ -107,7 +107,7 @@ export class DropboxClient {
 			for (const entry of res.json.entries) {
 				if (entry[".tag"] === "file") {
 					results.push({
-						path: entry.path_lower,
+						path: entry.path_display, // 大文字小文字を保持
 						rev: entry.rev,
 						serverModified: entry.server_modified,
 						size: entry.size,
