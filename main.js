@@ -234,21 +234,27 @@ var SyncEngine = class {
         }
       }
       const deletedFiles = [];
+      const locallyDeleted = /* @__PURE__ */ new Set();
       for (const [lowerPath] of this.syncedRevs) {
         if (remotePathLower.has(lowerPath)) continue;
         if (await this.app.vault.adapter.exists(lowerPath)) {
           await this.app.vault.adapter.remove(lowerPath);
           this.syncedRevs.delete(lowerPath);
+          locallyDeleted.add(lowerPath);
           deletedFiles.push(lowerPath);
+        } else {
+          this.syncedRevs.delete(lowerPath);
         }
       }
       const allLocalFiles = this.app.vault.getFiles();
       for (const file of allLocalFiles) {
         if (this.isExcluded(file.path)) continue;
         if (remotePathLower.has(file.path.toLowerCase())) continue;
+        if (locallyDeleted.has(file.path.toLowerCase())) continue;
         const remotePath = this.toRemotePath(file.path);
         if (!remotePath) continue;
-        const content = await this.app.vault.readBinary(file);
+        const content = await this.app.vault.readBinary(file).catch(() => null);
+        if (!content) continue;
         const rev = await this.dbx.upload(remotePath, content);
         this.syncedRevs.set(file.path.toLowerCase(), rev);
         uploadedFiles.push(file.path);

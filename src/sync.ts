@@ -79,12 +79,17 @@ export class SyncEngine {
 
 			// Dropboxで削除されたファイルをローカルからも削除
 			const deletedFiles: string[] = [];
+			const locallyDeleted = new Set<string>(); // 今回削除したパス（アップロードをスキップ用）
 			for (const [lowerPath] of this.syncedRevs) {
 				if (remotePathLower.has(lowerPath)) continue;
 				if (await this.app.vault.adapter.exists(lowerPath)) {
 					await this.app.vault.adapter.remove(lowerPath);
 					this.syncedRevs.delete(lowerPath);
+					locallyDeleted.add(lowerPath);
 					deletedFiles.push(lowerPath);
+				} else {
+					// ファイルが既に存在しない場合もsyncedRevsから除去
+					this.syncedRevs.delete(lowerPath);
 				}
 			}
 
@@ -93,9 +98,11 @@ export class SyncEngine {
 			for (const file of allLocalFiles) {
 				if (this.isExcluded(file.path)) continue;
 				if (remotePathLower.has(file.path.toLowerCase())) continue;
+				if (locallyDeleted.has(file.path.toLowerCase())) continue; // 今回削除したものはスキップ
 				const remotePath = this.toRemotePath(file.path);
 				if (!remotePath) continue;
-				const content = await this.app.vault.readBinary(file);
+				const content = await this.app.vault.readBinary(file).catch(() => null);
+				if (!content) continue; // 読み込めない場合はスキップ
 				const rev = await this.dbx.upload(remotePath, content);
 				this.syncedRevs.set(file.path.toLowerCase(), rev);
 				uploadedFiles.push(file.path);
