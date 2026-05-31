@@ -176,13 +176,15 @@ export class SyncEngine {
 		if (!this.startupDone) return;
 		if (this.isExcluded(file.path)) return;
 		if (this.downloading.has(file.path)) return;
-		const existing = this.debounceTimers.get(file.path);
+		// 大文字小文字を統一してデバウンスキーを管理
+		const key = file.path.toLowerCase();
+		const existing = this.debounceTimers.get(key);
 		if (existing) clearTimeout(existing);
 
 		const timer = setTimeout(async () => {
-			this.debounceTimers.delete(file.path);
+			this.debounceTimers.delete(key);
 			const name = file.name;
-			const lowerPath = file.path.toLowerCase();
+			const lowerPath = key;
 			try {
 				const content = await this.app.vault.readBinary(file);
 				const hash = await this.hashContent(content);
@@ -200,7 +202,7 @@ export class SyncEngine {
 			}
 		}, this.debounceMs);
 
-		this.debounceTimers.set(file.path, timer);
+		this.debounceTimers.set(key, timer);
 	}
 
 	// デバウンス中の全ファイルを即時アップロード（終了時用）

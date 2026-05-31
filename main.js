@@ -326,12 +326,13 @@ ${preview}${more}`, 6e3);
     if (!this.startupDone) return;
     if (this.isExcluded(file.path)) return;
     if (this.downloading.has(file.path)) return;
-    const existing = this.debounceTimers.get(file.path);
+    const key = file.path.toLowerCase();
+    const existing = this.debounceTimers.get(key);
     if (existing) clearTimeout(existing);
     const timer = setTimeout(async () => {
-      this.debounceTimers.delete(file.path);
+      this.debounceTimers.delete(key);
       const name = file.name;
-      const lowerPath = file.path.toLowerCase();
+      const lowerPath = key;
       try {
         const content = await this.app.vault.readBinary(file);
         const hash = await this.hashContent(content);
@@ -347,7 +348,7 @@ ${preview}${more}`, 6e3);
         console.error(`CloudSync upload error (${file.path}):`, e);
       }
     }, this.debounceMs);
-    this.debounceTimers.set(file.path, timer);
+    this.debounceTimers.set(key, timer);
   }
   // デバウンス中の全ファイルを即時アップロード（終了時用）
   async flushPending() {
