@@ -13,6 +13,7 @@ export class SyncEngine {
 	private downloading = new Set<string>();
 	private startupDone = false;
 	private ignorePatterns: string[] = [];
+	private recentUploads = new Map<string, number>(); // lowerPath → timestamp
 
 	constructor(
 		private app: App,
@@ -116,6 +117,7 @@ export class SyncEngine {
 				if (!content) continue; // 読み込めない場合はスキップ
 				const rev = await this.dbx.upload(remotePath, content);
 				this.syncedRevs.set(file.path.toLowerCase(), rev);
+				this.recentUploads.set(file.path.toLowerCase(), Date.now());
 				uploadedFiles.push(file.path);
 			}
 
@@ -173,6 +175,9 @@ export class SyncEngine {
 		if (!this.startupDone) return;
 		if (this.isExcluded(file.path)) return;
 		if (this.downloading.has(file.path)) return;
+		// 10秒以内にアップロード済みならスキップ（自動保存による二重アップロード防止）
+		const lastUpload = this.recentUploads.get(file.path.toLowerCase());
+		if (lastUpload && Date.now() - lastUpload < 10000) return;
 		const existing = this.debounceTimers.get(file.path);
 		if (existing) clearTimeout(existing);
 
@@ -181,7 +186,10 @@ export class SyncEngine {
 			const name = file.name;
 			this.uploadFile(file)
 				.then(rev => {
-					if (rev) this.syncedRevs.set(file.path.toLowerCase(), rev);
+					if (rev) {
+						this.syncedRevs.set(file.path.toLowerCase(), rev);
+						this.recentUploads.set(file.path.toLowerCase(), Date.now());
+					}
 					new Notice(`☁️ ${name} をアップロードしました`);
 				})
 				.catch(e => {

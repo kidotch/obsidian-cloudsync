@@ -176,6 +176,7 @@ var DropboxClient = class {
 // src/sync.ts
 var import_obsidian2 = require("obsidian");
 var SyncEngine = class {
+  // lowerPath → timestamp
   constructor(app, dbx, remotePath, onSaveRevs) {
     this.app = app;
     this.dbx = dbx;
@@ -187,6 +188,7 @@ var SyncEngine = class {
     this.downloading = /* @__PURE__ */ new Set();
     this.startupDone = false;
     this.ignorePatterns = [];
+    this.recentUploads = /* @__PURE__ */ new Map();
   }
   loadRevs(revs) {
     this.syncedRevs = new Map(
@@ -266,6 +268,7 @@ var SyncEngine = class {
         if (!content) continue;
         const rev = await this.dbx.upload(remotePath, content);
         this.syncedRevs.set(file.path.toLowerCase(), rev);
+        this.recentUploads.set(file.path.toLowerCase(), Date.now());
         uploadedFiles.push(file.path);
       }
       for (const path of uploadedFiles) {
@@ -322,13 +325,18 @@ ${preview}${more}`, 6e3);
     if (!this.startupDone) return;
     if (this.isExcluded(file.path)) return;
     if (this.downloading.has(file.path)) return;
+    const lastUpload = this.recentUploads.get(file.path.toLowerCase());
+    if (lastUpload && Date.now() - lastUpload < 1e4) return;
     const existing = this.debounceTimers.get(file.path);
     if (existing) clearTimeout(existing);
     const timer = setTimeout(() => {
       this.debounceTimers.delete(file.path);
       const name = file.name;
       this.uploadFile(file).then((rev) => {
-        if (rev) this.syncedRevs.set(file.path.toLowerCase(), rev);
+        if (rev) {
+          this.syncedRevs.set(file.path.toLowerCase(), rev);
+          this.recentUploads.set(file.path.toLowerCase(), Date.now());
+        }
         new import_obsidian2.Notice(`\u2601\uFE0F ${name} \u3092\u30A2\u30C3\u30D7\u30ED\u30FC\u30C9\u3057\u307E\u3057\u305F`);
       }).catch((e) => {
         new import_obsidian2.Notice(`CloudSync: \u30A2\u30C3\u30D7\u30ED\u30FC\u30C9\u5931\u6557 (${name}): ${e.message}`);
