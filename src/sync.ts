@@ -71,6 +71,18 @@ export class SyncEngine {
 				}
 			}
 
+			// Dropboxで削除されたファイルをローカルからも削除
+			// （syncedRevsにあるがDropboxにない＝他の端末で削除された）
+			const deletedFiles: string[] = [];
+			for (const [localPath] of this.syncedRevs) {
+				if (remotePathSet.has(localPath)) continue;
+				if (await this.app.vault.adapter.exists(localPath)) {
+					await this.app.vault.adapter.remove(localPath);
+					this.syncedRevs.delete(localPath);
+					deletedFiles.push(localPath);
+				}
+			}
+
 			// ローカル → Dropbox（ローカルにあってDropboxにないものをアップロード）
 			const allLocalFiles = this.app.vault.getFiles();
 			for (const file of allLocalFiles) {
@@ -84,11 +96,11 @@ export class SyncEngine {
 				uploadedFiles.push(file.path);
 			}
 
-			const total = updatedFiles.length + uploadedFiles.length;
+			const total = updatedFiles.length + uploadedFiles.length + deletedFiles.length;
 			if (total === 0) {
 				new Notice("☁️ 最新の状態です");
 			} else {
-				const allChanged = [...updatedFiles, ...uploadedFiles];
+				const allChanged = [...updatedFiles, ...uploadedFiles, ...deletedFiles];
 				const preview = allChanged.slice(0, 3).map(f => `• ${f.split("/").pop()}`).join("\n");
 				const more = allChanged.length > 3 ? `\n他 ${allChanged.length - 3} 件` : "";
 				new Notice(`☁️ ${total}件を同期しました\n${preview}${more}`, 6000);

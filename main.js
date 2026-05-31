@@ -228,6 +228,15 @@ var SyncEngine = class {
           this.syncedRevs.set(localPath, remote.rev);
         }
       }
+      const deletedFiles = [];
+      for (const [localPath] of this.syncedRevs) {
+        if (remotePathSet.has(localPath)) continue;
+        if (await this.app.vault.adapter.exists(localPath)) {
+          await this.app.vault.adapter.remove(localPath);
+          this.syncedRevs.delete(localPath);
+          deletedFiles.push(localPath);
+        }
+      }
       const allLocalFiles = this.app.vault.getFiles();
       for (const file of allLocalFiles) {
         if (this.isExcluded(file.path)) continue;
@@ -239,11 +248,11 @@ var SyncEngine = class {
         this.syncedRevs.set(file.path, rev);
         uploadedFiles.push(file.path);
       }
-      const total = updatedFiles.length + uploadedFiles.length;
+      const total = updatedFiles.length + uploadedFiles.length + deletedFiles.length;
       if (total === 0) {
         new import_obsidian2.Notice("\u2601\uFE0F \u6700\u65B0\u306E\u72B6\u614B\u3067\u3059");
       } else {
-        const allChanged = [...updatedFiles, ...uploadedFiles];
+        const allChanged = [...updatedFiles, ...uploadedFiles, ...deletedFiles];
         const preview = allChanged.slice(0, 3).map((f) => `\u2022 ${f.split("/").pop()}`).join("\n");
         const more = allChanged.length > 3 ? `
 \u4ED6 ${allChanged.length - 3} \u4EF6` : "";
