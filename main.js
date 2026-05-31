@@ -268,6 +268,13 @@ var SyncEngine = class {
         this.syncedRevs.set(file.path.toLowerCase(), rev);
         uploadedFiles.push(file.path);
       }
+      for (const path of uploadedFiles) {
+        const timer = this.debounceTimers.get(path);
+        if (timer) {
+          clearTimeout(timer);
+          this.debounceTimers.delete(path);
+        }
+      }
       const total = updatedFiles.length + uploadedFiles.length + deletedFiles.length;
       if (total === 0) {
         new import_obsidian2.Notice("\u2601\uFE0F \u6700\u65B0\u306E\u72B6\u614B\u3067\u3059");

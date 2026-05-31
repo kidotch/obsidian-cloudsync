@@ -119,6 +119,12 @@ export class SyncEngine {
 				uploadedFiles.push(file.path);
 			}
 
+			// 起動時アップロード済みのデバウンスタイマーをキャンセル（二重アップロード防止）
+			for (const path of uploadedFiles) {
+				const timer = this.debounceTimers.get(path);
+				if (timer) { clearTimeout(timer); this.debounceTimers.delete(path); }
+			}
+
 			const total = updatedFiles.length + uploadedFiles.length + deletedFiles.length;
 			if (total === 0) {
 				new Notice("☁️ 最新の状態です");
