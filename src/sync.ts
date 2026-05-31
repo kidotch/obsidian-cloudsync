@@ -46,17 +46,19 @@ export class SyncEngine {
 
 	async pullOnStartup(retry = 0): Promise<void> {
 		new Notice("☁️ 同期中...");
-		await this.loadIgnoreFile(); // 毎回最新のignoreを読み込む
+		await this.loadIgnoreFile();
 		try {
 			const remoteFiles = await this.dbx.listFiles();
+			const remotePathSet = new Set(remoteFiles.map(f => this.toLocalPath(f.path)).filter(Boolean) as string[]);
 			const updatedFiles: string[] = [];
+			const uploadedFiles: string[] = [];
 
+			// Dropbox → ローカル（ダウンロード）
 			for (const remote of remoteFiles) {
 				const localPath = this.toLocalPath(remote.path);
 				if (!localPath) continue;
 
 				const localFile = this.app.vault.getAbstractFileByPath(localPath);
-
 				const syncedRev = this.syncedRevs.get(localPath);
 				if (syncedRev === remote.rev) continue;
 
@@ -69,15 +71,29 @@ export class SyncEngine {
 				}
 			}
 
-			if (updatedFiles.length === 0) {
+			// ローカル → Dropbox（ローカルにあってDropboxにないものをアップロード）
+			const allLocalFiles = this.app.vault.getFiles();
+			for (const file of allLocalFiles) {
+				if (this.isExcluded(file.path)) continue;
+				if (remotePathSet.has(file.path)) continue;
+				if (this.syncedRevs.has(file.path)) continue; // 以前同期済み→削除されたもの
+				const remotePath = this.toRemotePath(file.path);
+				if (!remotePath) continue;
+				const content = await this.app.vault.readBinary(file);
+				const rev = await this.dbx.upload(remotePath, content);
+				this.syncedRevs.set(file.path, rev);
+				uploadedFiles.push(file.path);
+			}
+
+			const total = updatedFiles.length + uploadedFiles.length;
+			if (total === 0) {
 				new Notice("☁️ 最新の状態です");
 			} else {
-				// 通知：最初の3件を表示
-				const preview = updatedFiles.slice(0, 3).map(f => `• ${f.split("/").pop()}`).join("\n");
-				const more = updatedFiles.length > 3 ? `\n他 ${updatedFiles.length - 3} 件` : "";
-				new Notice(`☁️ ${updatedFiles.length}件を更新しました\n${preview}${more}`, 6000);
-				// ログファイルに記録
-				await this.appendLog(updatedFiles);
+				const allChanged = [...updatedFiles, ...uploadedFiles];
+				const preview = allChanged.slice(0, 3).map(f => `• ${f.split("/").pop()}`).join("\n");
+				const more = allChanged.length > 3 ? `\n他 ${allChanged.length - 3} 件` : "";
+				new Notice(`☁️ ${total}件を同期しました\n${preview}${more}`, 6000);
+				await this.appendLog(allChanged);
 			}
 			this.startupDone = true;
 			this.saveRevs();

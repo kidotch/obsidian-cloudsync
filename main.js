@@ -211,7 +211,9 @@ var SyncEngine = class {
     await this.loadIgnoreFile();
     try {
       const remoteFiles = await this.dbx.listFiles();
+      const remotePathSet = new Set(remoteFiles.map((f) => this.toLocalPath(f.path)).filter(Boolean));
       const updatedFiles = [];
+      const uploadedFiles = [];
       for (const remote of remoteFiles) {
         const localPath = this.toLocalPath(remote.path);
         if (!localPath) continue;
@@ -226,15 +228,29 @@ var SyncEngine = class {
           this.syncedRevs.set(localPath, remote.rev);
         }
       }
-      if (updatedFiles.length === 0) {
+      const allLocalFiles = this.app.vault.getFiles();
+      for (const file of allLocalFiles) {
+        if (this.isExcluded(file.path)) continue;
+        if (remotePathSet.has(file.path)) continue;
+        if (this.syncedRevs.has(file.path)) continue;
+        const remotePath = this.toRemotePath(file.path);
+        if (!remotePath) continue;
+        const content = await this.app.vault.readBinary(file);
+        const rev = await this.dbx.upload(remotePath, content);
+        this.syncedRevs.set(file.path, rev);
+        uploadedFiles.push(file.path);
+      }
+      const total = updatedFiles.length + uploadedFiles.length;
+      if (total === 0) {
         new import_obsidian2.Notice("\u2601\uFE0F \u6700\u65B0\u306E\u72B6\u614B\u3067\u3059");
       } else {
-        const preview = updatedFiles.slice(0, 3).map((f) => `\u2022 ${f.split("/").pop()}`).join("\n");
-        const more = updatedFiles.length > 3 ? `
-\u4ED6 ${updatedFiles.length - 3} \u4EF6` : "";
-        new import_obsidian2.Notice(`\u2601\uFE0F ${updatedFiles.length}\u4EF6\u3092\u66F4\u65B0\u3057\u307E\u3057\u305F
+        const allChanged = [...updatedFiles, ...uploadedFiles];
+        const preview = allChanged.slice(0, 3).map((f) => `\u2022 ${f.split("/").pop()}`).join("\n");
+        const more = allChanged.length > 3 ? `
+\u4ED6 ${allChanged.length - 3} \u4EF6` : "";
+        new import_obsidian2.Notice(`\u2601\uFE0F ${total}\u4EF6\u3092\u540C\u671F\u3057\u307E\u3057\u305F
 ${preview}${more}`, 6e3);
-        await this.appendLog(updatedFiles);
+        await this.appendLog(allChanged);
       }
       this.startupDone = true;
       this.saveRevs();
