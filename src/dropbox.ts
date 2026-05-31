@@ -2,7 +2,15 @@
  * Dropbox API クライアント
  * Obsidian の requestUrl を使って動作（モバイル対応）
  */
-import { requestUrl } from "obsidian";
+import { requestUrl, RequestUrlParam, RequestUrlResponse } from "obsidian";
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+// 一時的なネットワーク障害かどうか（これだけリトライ対象にする）
+function isTransientNetworkError(e: unknown): boolean {
+	const msg = String((e as { message?: string })?.message ?? e);
+	return /network|connection|lost|timeout|ECONN|ERR_|fetch failed|socket|reset by peer|aborted/i.test(msg);
+}
 
 export interface DropboxSettings {
 	appKey: string;
@@ -46,6 +54,22 @@ export class DropboxClient {
 	private tokenExpiry = 0;
 
 	constructor(private settings: DropboxSettings) {}
+
+	// requestUrl のラッパー。一時的な通信エラーだけ指数バックオフで再試行する。
+	// （認証エラーや 4xx は再試行しても無駄なので即座に投げる）
+	private async req(options: RequestUrlParam, retries = 3): Promise<RequestUrlResponse> {
+		let lastErr: unknown;
+		for (let attempt = 0; attempt <= retries; attempt++) {
+			try {
+				return await requestUrl(options);
+			} catch (e) {
+				lastErr = e;
+				if (!isTransientNetworkError(e) || attempt === retries) throw e;
+				await sleep(1000 * Math.pow(2, attempt)); // 1s → 2s → 4s
+			}
+		}
+		throw lastErr;
+	}
 
 	// ────────────────────────────────────────────
 	// 認証
@@ -112,7 +136,7 @@ export class DropboxClient {
 		const headers = await this.authHeader();
 		const results: FileEntry[] = [];
 
-		let res = await requestUrl({
+		let res = await this.req({
 			url: "https://api.dropboxapi.com/2/files/list_folder",
 			method: "POST",
 			headers: { ...headers, "Content-Type": "application/json" },
@@ -132,7 +156,7 @@ export class DropboxClient {
 				}
 			}
 			if (!res.json.has_more) break;
-			res = await requestUrl({
+			res = await this.req({
 				url: "https://api.dropboxapi.com/2/files/list_folder/continue",
 				method: "POST",
 				headers: { ...headers, "Content-Type": "application/json" },
@@ -149,7 +173,7 @@ export class DropboxClient {
 	// 現時点の最新 cursor を取得（以降の変更だけを追跡する起点）
 	async getLatestCursor(): Promise<string> {
 		const headers = await this.authHeader();
-		const res = await requestUrl({
+		const res = await this.req({
 			url: "https://api.dropboxapi.com/2/files/list_folder/get_latest_cursor",
 			method: "POST",
 			headers: { ...headers, "Content-Type": "application/json" },
@@ -164,7 +188,7 @@ export class DropboxClient {
 		const entries: DeltaEntry[] = [];
 		let c = cursor;
 		while (true) {
-			const res = await requestUrl({
+			const res = await this.req({
 				url: "https://api.dropboxapi.com/2/files/list_folder/continue",
 				method: "POST",
 				headers: { ...headers, "Content-Type": "application/json" },
@@ -201,7 +225,7 @@ export class DropboxClient {
 
 	async upload(remotePath: string, content: ArrayBuffer): Promise<string> {
 		const headers = await this.authHeader();
-		const res = await requestUrl({
+		const res = await this.req({
 			url: "https://content.dropboxapi.com/2/files/upload",
 			method: "POST",
 			headers: {
@@ -224,7 +248,7 @@ export class DropboxClient {
 
 	async download(remotePath: string): Promise<ArrayBuffer> {
 		const headers = await this.authHeader();
-		const res = await requestUrl({
+		const res = await this.req({
 			url: "https://content.dropboxapi.com/2/files/download",
 			method: "POST",
 			headers: {
@@ -241,7 +265,7 @@ export class DropboxClient {
 
 	async deleteFile(remotePath: string): Promise<void> {
 		const headers = await this.authHeader();
-		await requestUrl({
+		await this.req({
 			url: "https://api.dropboxapi.com/2/files/delete_v2",
 			method: "POST",
 			headers: { ...headers, "Content-Type": "application/json" },

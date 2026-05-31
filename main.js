@@ -26,6 +26,12 @@ var import_obsidian4 = require("obsidian");
 
 // src/dropbox.ts
 var import_obsidian = require("obsidian");
+var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function isTransientNetworkError(e) {
+  var _a;
+  const msg = String((_a = e == null ? void 0 : e.message) != null ? _a : e);
+  return /network|connection|lost|timeout|ECONN|ERR_|fetch failed|socket|reset by peer|aborted/i.test(msg);
+}
 function escapeForHeader(obj) {
   return JSON.stringify(obj).replace(
     /[^\x00-\x7F]/g,
@@ -37,6 +43,21 @@ var DropboxClient = class {
     this.settings = settings;
     this.accessToken = "";
     this.tokenExpiry = 0;
+  }
+  // requestUrl のラッパー。一時的な通信エラーだけ指数バックオフで再試行する。
+  // （認証エラーや 4xx は再試行しても無駄なので即座に投げる）
+  async req(options, retries = 3) {
+    let lastErr;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await (0, import_obsidian.requestUrl)(options);
+      } catch (e) {
+        lastErr = e;
+        if (!isTransientNetworkError(e) || attempt === retries) throw e;
+        await sleep(1e3 * Math.pow(2, attempt));
+      }
+    }
+    throw lastErr;
   }
   // ────────────────────────────────────────────
   // 認証
@@ -95,7 +116,7 @@ var DropboxClient = class {
   async listFiles() {
     const headers = await this.authHeader();
     const results = [];
-    let res = await (0, import_obsidian.requestUrl)({
+    let res = await this.req({
       url: "https://api.dropboxapi.com/2/files/list_folder",
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
@@ -115,7 +136,7 @@ var DropboxClient = class {
         }
       }
       if (!res.json.has_more) break;
-      res = await (0, import_obsidian.requestUrl)({
+      res = await this.req({
         url: "https://api.dropboxapi.com/2/files/list_folder/continue",
         method: "POST",
         headers: { ...headers, "Content-Type": "application/json" },
@@ -130,7 +151,7 @@ var DropboxClient = class {
   // 現時点の最新 cursor を取得（以降の変更だけを追跡する起点）
   async getLatestCursor() {
     const headers = await this.authHeader();
-    const res = await (0, import_obsidian.requestUrl)({
+    const res = await this.req({
       url: "https://api.dropboxapi.com/2/files/list_folder/get_latest_cursor",
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
@@ -144,7 +165,7 @@ var DropboxClient = class {
     const entries = [];
     let c = cursor;
     while (true) {
-      const res = await (0, import_obsidian.requestUrl)({
+      const res = await this.req({
         url: "https://api.dropboxapi.com/2/files/list_folder/continue",
         method: "POST",
         headers: { ...headers, "Content-Type": "application/json" },
@@ -179,7 +200,7 @@ var DropboxClient = class {
   // ────────────────────────────────────────────
   async upload(remotePath, content) {
     const headers = await this.authHeader();
-    const res = await (0, import_obsidian.requestUrl)({
+    const res = await this.req({
       url: "https://content.dropboxapi.com/2/files/upload",
       method: "POST",
       headers: {
@@ -200,7 +221,7 @@ var DropboxClient = class {
   // ────────────────────────────────────────────
   async download(remotePath) {
     const headers = await this.authHeader();
-    const res = await (0, import_obsidian.requestUrl)({
+    const res = await this.req({
       url: "https://content.dropboxapi.com/2/files/download",
       method: "POST",
       headers: {
@@ -215,7 +236,7 @@ var DropboxClient = class {
   // ────────────────────────────────────────────
   async deleteFile(remotePath) {
     const headers = await this.authHeader();
-    await (0, import_obsidian.requestUrl)({
+    await this.req({
       url: "https://api.dropboxapi.com/2/files/delete_v2",
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
@@ -286,16 +307,17 @@ var SyncEngine = class {
     try {
       const updated = [];
       const deleted = [];
+      const failed = [];
       if (!this.cursor) {
-        await this.fullSync(updated, deleted);
+        await this.fullSync(updated, deleted, failed);
       } else {
-        await this.deltaSync(updated, deleted);
+        await this.deltaSync(updated, deleted, failed);
       }
-      const uploaded = await this.pushLocalChanges();
+      const uploaded = await this.pushLocalChanges(failed);
       this.startupDone = true;
       this.saveState();
       const total = updated.length + uploaded.length + deleted.length;
-      if (total === 0) {
+      if (total === 0 && failed.length === 0) {
         new import_obsidian2.Notice("\u2601\uFE0F \u6700\u65B0\u306E\u72B6\u614B\u3067\u3059");
       } else {
         const entries = [
@@ -306,9 +328,11 @@ var SyncEngine = class {
         const preview = entries.slice(0, 3).map((e) => `\u2022 ${e.action} ${e.path.split("/").pop()}`).join("\n");
         const more = entries.length > 3 ? `
 \u4ED6 ${entries.length - 3} \u4EF6` : "";
-        new import_obsidian2.Notice(`\u2601\uFE0F ${total}\u4EF6\u3092\u540C\u671F\u3057\u307E\u3057\u305F
+        const warn = failed.length ? `
+\u26A0\uFE0F ${failed.length}\u4EF6\u306F\u901A\u4FE1\u4E0D\u826F\u3067\u30B9\u30AD\u30C3\u30D7\uFF08\u6B21\u56DE\u518D\u8A66\u884C\uFF09` : "";
+        new import_obsidian2.Notice(`\u2601\uFE0F ${total}\u4EF6\u3092\u540C\u671F\u3057\u307E\u3057\u305F${warn}
 ${preview}${more}`, 6e3);
-        await this.appendLog(entries);
+        if (entries.length) await this.appendLog(entries);
       }
     } catch (e) {
       if (retry < 2) {
@@ -327,7 +351,7 @@ ${preview}${more}`, 6e3);
   // ────────────────────────────────────────────
   // 初回フル照合（cursor 未保持時のみ）
   // ────────────────────────────────────────────
-  async fullSync(updated, deleted) {
+  async fullSync(updated, deleted, failed) {
     var _a, _b;
     const latestCursor = await this.dbx.getLatestCursor();
     const remoteFiles = await this.dbx.listFiles();
@@ -358,14 +382,19 @@ ${preview}${more}`, 6e3);
       }
       const localFile = fileByLower.get(lower);
       if (!localFile || await this.isRemoteNewer(localFile, remote)) {
-        await this.downloadFile(remote.path, (_a = localFile == null ? void 0 : localFile.path) != null ? _a : localPath);
-        const content = await this.app.vault.adapter.readBinary((_b = localFile == null ? void 0 : localFile.path) != null ? _b : localPath);
-        this.syncedFiles.set(lower, {
-          rev: remote.rev,
-          hash: await this.hashContent(content),
-          path: remote.path
-        });
-        updated.push(localPath);
+        try {
+          await this.downloadFile(remote.path, (_a = localFile == null ? void 0 : localFile.path) != null ? _a : localPath);
+          const content = await this.app.vault.adapter.readBinary((_b = localFile == null ? void 0 : localFile.path) != null ? _b : localPath);
+          this.syncedFiles.set(lower, {
+            rev: remote.rev,
+            hash: await this.hashContent(content),
+            path: remote.path
+          });
+          updated.push(localPath);
+        } catch (e) {
+          failed.push(localPath);
+          console.error(`CloudSync: \u30C0\u30A6\u30F3\u30ED\u30FC\u30C9\u5931\u6557 ${localPath}:`, e);
+        }
       }
     }
     for (const [lower] of [...this.syncedFiles]) {
@@ -381,12 +410,12 @@ ${preview}${more}`, 6e3);
       }
       this.syncedFiles.delete(lower);
     }
-    this.cursor = latestCursor;
+    if (failed.length === 0) this.cursor = latestCursor;
   }
   // ────────────────────────────────────────────
   // 差分同期（cursor 保持時）
   // ────────────────────────────────────────────
-  async deltaSync(updated, deleted) {
+  async deltaSync(updated, deleted, failed) {
     var _a, _b;
     const { entries, cursor } = await this.dbx.listDelta(this.cursor);
     const fileByLower = this.buildFileMap();
@@ -418,21 +447,26 @@ ${preview}${more}`, 6e3);
           await this.makeConflictCopy(lf);
         }
       }
-      await this.downloadFile(entry.path, (_a = lf == null ? void 0 : lf.path) != null ? _a : localPath);
-      const content = await this.app.vault.adapter.readBinary((_b = lf == null ? void 0 : lf.path) != null ? _b : localPath);
-      this.syncedFiles.set(lower, {
-        rev: entry.rev,
-        hash: await this.hashContent(content),
-        path: entry.path
-      });
-      updated.push(localPath);
+      try {
+        await this.downloadFile(entry.path, (_a = lf == null ? void 0 : lf.path) != null ? _a : localPath);
+        const content = await this.app.vault.adapter.readBinary((_b = lf == null ? void 0 : lf.path) != null ? _b : localPath);
+        this.syncedFiles.set(lower, {
+          rev: entry.rev,
+          hash: await this.hashContent(content),
+          path: entry.path
+        });
+        updated.push(localPath);
+      } catch (e) {
+        failed.push(localPath);
+        console.error(`CloudSync: \u30C0\u30A6\u30F3\u30ED\u30FC\u30C9\u5931\u6557 ${localPath}:`, e);
+      }
     }
-    this.cursor = cursor;
+    if (failed.length === 0) this.cursor = cursor;
   }
   // ────────────────────────────────────────────
   // local → remote（変化したローカルファイルをまとめて反映）
   // ────────────────────────────────────────────
-  async pushLocalChanges() {
+  async pushLocalChanges(failed) {
     const uploaded = [];
     for (const file of this.app.vault.getFiles()) {
       if (this.isExcluded(file.path)) continue;
@@ -444,13 +478,18 @@ ${preview}${more}`, 6e3);
       const lower = file.path.toLowerCase();
       const state = this.syncedFiles.get(lower);
       if (state && state.hash === hash) continue;
-      const rev = await this.dbx.upload(remotePath, content);
-      this.syncedFiles.set(lower, { rev, hash, path: file.path });
-      uploaded.push(file.path);
-      const t = this.debounceTimers.get(lower);
-      if (t) {
-        clearTimeout(t);
-        this.debounceTimers.delete(lower);
+      try {
+        const rev = await this.dbx.upload(remotePath, content);
+        this.syncedFiles.set(lower, { rev, hash, path: file.path });
+        uploaded.push(file.path);
+        const t = this.debounceTimers.get(lower);
+        if (t) {
+          clearTimeout(t);
+          this.debounceTimers.delete(lower);
+        }
+      } catch (e) {
+        failed.push(file.path);
+        console.error(`CloudSync: \u30A2\u30C3\u30D7\u30ED\u30FC\u30C9\u5931\u6557 ${file.path}:`, e);
       }
     }
     return uploaded;

@@ -90,20 +90,21 @@ export class SyncEngine {
 		try {
 			const updated: string[] = [];
 			const deleted: string[] = [];
+			const failed: string[] = []; // 通信不良などでスキップしたファイル
 
 			if (!this.cursor) {
-				await this.fullSync(updated, deleted);
+				await this.fullSync(updated, deleted, failed);
 			} else {
-				await this.deltaSync(updated, deleted);
+				await this.deltaSync(updated, deleted, failed);
 			}
 
-			const uploaded = await this.pushLocalChanges();
+			const uploaded = await this.pushLocalChanges(failed);
 
 			this.startupDone = true;
 			this.saveState();
 
 			const total = updated.length + uploaded.length + deleted.length;
-			if (total === 0) {
+			if (total === 0 && failed.length === 0) {
 				new Notice("☁️ 最新の状態です");
 			} else {
 				const entries = [
@@ -113,8 +114,9 @@ export class SyncEngine {
 				];
 				const preview = entries.slice(0, 3).map(e => `• ${e.action} ${e.path.split("/").pop()}`).join("\n");
 				const more = entries.length > 3 ? `\n他 ${entries.length - 3} 件` : "";
-				new Notice(`☁️ ${total}件を同期しました\n${preview}${more}`, 6000);
-				await this.appendLog(entries);
+				const warn = failed.length ? `\n⚠️ ${failed.length}件は通信不良でスキップ（次回再試行）` : "";
+				new Notice(`☁️ ${total}件を同期しました${warn}\n${preview}${more}`, 6000);
+				if (entries.length) await this.appendLog(entries);
 			}
 		} catch (e) {
 			if (retry < 2) {
@@ -135,7 +137,7 @@ export class SyncEngine {
 	// 初回フル照合（cursor 未保持時のみ）
 	// ────────────────────────────────────────────
 
-	private async fullSync(updated: string[], deleted: string[]): Promise<void> {
+	private async fullSync(updated: string[], deleted: string[], failed: string[]): Promise<void> {
 		// 起点 cursor を先に確保（list の最中の変更は次回 delta で拾う）
 		const latestCursor = await this.dbx.getLatestCursor();
 		const remoteFiles = await this.dbx.listFiles();
@@ -172,14 +174,19 @@ export class SyncEngine {
 
 			const localFile = fileByLower.get(lower);
 			if (!localFile || await this.isRemoteNewer(localFile, remote)) {
-				await this.downloadFile(remote.path, localFile?.path ?? localPath);
-				const content = await this.app.vault.adapter.readBinary(localFile?.path ?? localPath);
-				this.syncedFiles.set(lower, {
-					rev: remote.rev,
-					hash: await this.hashContent(content),
-					path: remote.path,
-				});
-				updated.push(localPath);
+				try {
+					await this.downloadFile(remote.path, localFile?.path ?? localPath);
+					const content = await this.app.vault.adapter.readBinary(localFile?.path ?? localPath);
+					this.syncedFiles.set(lower, {
+						rev: remote.rev,
+						hash: await this.hashContent(content),
+						path: remote.path,
+					});
+					updated.push(localPath);
+				} catch (e) {
+					failed.push(localPath); // 1ファイルの失敗で全体を止めない
+					console.error(`CloudSync: ダウンロード失敗 ${localPath}:`, e);
+				}
 			}
 			// ローカルの方が新しい場合は触らない → pushLocalChanges が上げる
 		}
@@ -199,14 +206,16 @@ export class SyncEngine {
 			this.syncedFiles.delete(lower);
 		}
 
-		this.cursor = latestCursor;
+		// 全ファイル成功したときだけ cursor を進める。
+		// 失敗が残っていれば cursor は空のままにして、次回もう一度フル照合で取りこぼしを拾う
+		if (failed.length === 0) this.cursor = latestCursor;
 	}
 
 	// ────────────────────────────────────────────
 	// 差分同期（cursor 保持時）
 	// ────────────────────────────────────────────
 
-	private async deltaSync(updated: string[], deleted: string[]): Promise<void> {
+	private async deltaSync(updated: string[], deleted: string[], failed: string[]): Promise<void> {
 		const { entries, cursor } = await this.dbx.listDelta(this.cursor);
 		const fileByLower = this.buildFileMap();
 
@@ -245,24 +254,30 @@ export class SyncEngine {
 				}
 			}
 
-			await this.downloadFile(entry.path, lf?.path ?? localPath);
-			const content = await this.app.vault.adapter.readBinary(lf?.path ?? localPath);
-			this.syncedFiles.set(lower, {
-				rev: entry.rev!,
-				hash: await this.hashContent(content),
-				path: entry.path,
-			});
-			updated.push(localPath);
+			try {
+				await this.downloadFile(entry.path, lf?.path ?? localPath);
+				const content = await this.app.vault.adapter.readBinary(lf?.path ?? localPath);
+				this.syncedFiles.set(lower, {
+					rev: entry.rev!,
+					hash: await this.hashContent(content),
+					path: entry.path,
+				});
+				updated.push(localPath);
+			} catch (e) {
+				failed.push(localPath); // 1ファイルの失敗で全体を止めない
+				console.error(`CloudSync: ダウンロード失敗 ${localPath}:`, e);
+			}
 		}
 
-		this.cursor = cursor;
+		// 取りこぼしがあれば cursor を進めない（次回同じ差分を取り直す。rev一致で済んだ分はスキップ）
+		if (failed.length === 0) this.cursor = cursor;
 	}
 
 	// ────────────────────────────────────────────
 	// local → remote（変化したローカルファイルをまとめて反映）
 	// ────────────────────────────────────────────
 
-	private async pushLocalChanges(): Promise<string[]> {
+	private async pushLocalChanges(failed: string[]): Promise<string[]> {
 		const uploaded: string[] = [];
 		for (const file of this.app.vault.getFiles()) {
 			if (this.isExcluded(file.path)) continue;
@@ -275,13 +290,18 @@ export class SyncEngine {
 			const state = this.syncedFiles.get(lower);
 			if (state && state.hash === hash) continue; // 変化なし
 
-			const rev = await this.dbx.upload(remotePath, content);
-			this.syncedFiles.set(lower, { rev, hash, path: file.path });
-			uploaded.push(file.path);
+			try {
+				const rev = await this.dbx.upload(remotePath, content);
+				this.syncedFiles.set(lower, { rev, hash, path: file.path });
+				uploaded.push(file.path);
 
-			// デバウンス中のタイマーがあればキャンセル（二重アップロード防止）
-			const t = this.debounceTimers.get(lower);
-			if (t) { clearTimeout(t); this.debounceTimers.delete(lower); }
+				// デバウンス中のタイマーがあればキャンセル（二重アップロード防止）
+				const t = this.debounceTimers.get(lower);
+				if (t) { clearTimeout(t); this.debounceTimers.delete(lower); }
+			} catch (e) {
+				failed.push(file.path); // 1ファイルの失敗で全体を止めない
+				console.error(`CloudSync: アップロード失敗 ${file.path}:`, e);
+			}
 		}
 		return uploaded;
 	}
