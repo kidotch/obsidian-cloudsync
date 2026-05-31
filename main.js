@@ -209,7 +209,7 @@ var SyncEngine = class {
     new import_obsidian2.Notice("\u2601\uFE0F \u540C\u671F\u4E2D...");
     try {
       const remoteFiles = await this.dbx.listFiles();
-      let downloaded = 0;
+      const updatedFiles = [];
       for (const remote of remoteFiles) {
         const localPath = this.toLocalPath(remote.path);
         if (!localPath) continue;
@@ -219,15 +219,20 @@ var SyncEngine = class {
         if (!localFile || await this.isRemoteNewer(localFile, remote)) {
           await this.downloadFile(remote.path, localPath);
           this.syncedRevs.set(localPath, remote.rev);
-          downloaded++;
+          updatedFiles.push(localPath);
         } else {
           this.syncedRevs.set(localPath, remote.rev);
         }
       }
-      if (downloaded === 0) {
+      if (updatedFiles.length === 0) {
         new import_obsidian2.Notice("\u2601\uFE0F \u6700\u65B0\u306E\u72B6\u614B\u3067\u3059");
       } else {
-        new import_obsidian2.Notice(`\u2601\uFE0F ${downloaded}\u4EF6\u306E\u30D5\u30A1\u30A4\u30EB\u3092\u66F4\u65B0\u3057\u307E\u3057\u305F`);
+        const preview = updatedFiles.slice(0, 3).map((f) => `\u2022 ${f.split("/").pop()}`).join("\n");
+        const more = updatedFiles.length > 3 ? `
+\u4ED6 ${updatedFiles.length - 3} \u4EF6` : "";
+        new import_obsidian2.Notice(`\u2601\uFE0F ${updatedFiles.length}\u4EF6\u3092\u66F4\u65B0\u3057\u307E\u3057\u305F
+${preview}${more}`, 6e3);
+        await this.appendLog(updatedFiles);
       }
       this.startupDone = true;
       this.saveRevs();
@@ -308,6 +313,19 @@ var SyncEngine = class {
     if (!remotePath) return;
     const content = await this.app.vault.readBinary(file);
     await this.dbx.upload(remotePath, content);
+  }
+  async appendLog(files) {
+    const logPath = "CloudSync Log.md";
+    const now = (/* @__PURE__ */ new Date()).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" });
+    const lines = [`
+## ${now}
+`, ...files.map((f) => `- ${f}`)].join("\n");
+    try {
+      const existing = await this.app.vault.adapter.exists(logPath) ? await this.app.vault.adapter.read(logPath) : "# CloudSync Log\n";
+      await this.app.vault.adapter.write(logPath, existing + lines + "\n");
+    } catch (e) {
+      console.error("CloudSync log write error:", e);
+    }
   }
   async downloadFile(remotePath, localPath) {
     this.downloading.add(localPath);

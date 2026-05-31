@@ -48,7 +48,7 @@ export class SyncEngine {
 		new Notice("☁️ 同期中...");
 		try {
 			const remoteFiles = await this.dbx.listFiles();
-			let downloaded = 0;
+			const updatedFiles: string[] = [];
 
 			for (const remote of remoteFiles) {
 				const localPath = this.toLocalPath(remote.path);
@@ -56,23 +56,27 @@ export class SyncEngine {
 
 				const localFile = this.app.vault.getAbstractFileByPath(localPath);
 
-				// 同じrevなら既に同期済みなのでスキップ
 				const syncedRev = this.syncedRevs.get(localPath);
 				if (syncedRev === remote.rev) continue;
 
 				if (!localFile || await this.isRemoteNewer(localFile as TFile, remote)) {
 					await this.downloadFile(remote.path, localPath);
 					this.syncedRevs.set(localPath, remote.rev);
-					downloaded++;
+					updatedFiles.push(localPath);
 				} else {
 					this.syncedRevs.set(localPath, remote.rev);
 				}
 			}
 
-			if (downloaded === 0) {
+			if (updatedFiles.length === 0) {
 				new Notice("☁️ 最新の状態です");
 			} else {
-				new Notice(`☁️ ${downloaded}件のファイルを更新しました`);
+				// 通知：最初の3件を表示
+				const preview = updatedFiles.slice(0, 3).map(f => `• ${f.split("/").pop()}`).join("\n");
+				const more = updatedFiles.length > 3 ? `\n他 ${updatedFiles.length - 3} 件` : "";
+				new Notice(`☁️ ${updatedFiles.length}件を更新しました\n${preview}${more}`, 6000);
+				// ログファイルに記録
+				await this.appendLog(updatedFiles);
 			}
 			this.startupDone = true;
 			this.saveRevs();
@@ -165,6 +169,19 @@ export class SyncEngine {
 		if (!remotePath) return;
 		const content = await this.app.vault.readBinary(file);
 		await this.dbx.upload(remotePath, content);
+	}
+
+	private async appendLog(files: string[]): Promise<void> {
+		const logPath = "CloudSync Log.md";
+		const now = new Date().toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" });
+		const lines = [`\n## ${now}\n`, ...files.map(f => `- ${f}`)].join("\n");
+		try {
+			const existing = await this.app.vault.adapter.exists(logPath)
+				? await this.app.vault.adapter.read(logPath) : "# CloudSync Log\n";
+			await this.app.vault.adapter.write(logPath, existing + lines + "\n");
+		} catch (e) {
+			console.error("CloudSync log write error:", e);
+		}
 	}
 
 	private async downloadFile(remotePath: string, localPath: string): Promise<void> {
