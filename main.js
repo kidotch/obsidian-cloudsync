@@ -224,25 +224,10 @@ var SyncEngine = class {
           this.syncedRevs.set(localPath, remote.rev);
         }
       }
-      let deleted = 0;
-      for (const [localPath, _] of this.syncedRevs) {
-        if (!this.app.vault.getAbstractFileByPath(localPath)) {
-          const remotePath = this.toRemotePath(localPath);
-          if (remotePath) {
-            await this.dbx.deleteFile(remotePath).catch(() => {
-            });
-            this.syncedRevs.delete(localPath);
-            deleted++;
-          }
-        }
-      }
-      if (downloaded === 0 && deleted === 0) {
+      if (downloaded === 0) {
         new import_obsidian2.Notice("\u2601\uFE0F \u6700\u65B0\u306E\u72B6\u614B\u3067\u3059");
       } else {
-        const parts = [];
-        if (downloaded > 0) parts.push(`${downloaded}\u4EF6\u66F4\u65B0`);
-        if (deleted > 0) parts.push(`${deleted}\u4EF6\u524A\u9664`);
-        new import_obsidian2.Notice(`\u2601\uFE0F ${parts.join("\u30FB")}\u3057\u307E\u3057\u305F`);
+        new import_obsidian2.Notice(`\u2601\uFE0F ${downloaded}\u4EF6\u306E\u30D5\u30A1\u30A4\u30EB\u3092\u66F4\u65B0\u3057\u307E\u3057\u305F`);
       }
       this.startupDone = true;
       this.saveRevs();

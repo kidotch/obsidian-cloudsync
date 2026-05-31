@@ -69,26 +69,10 @@ export class SyncEngine {
 				}
 			}
 
-			// 起動前に削除されたファイルをDropboxからも削除
-			let deleted = 0;
-			for (const [localPath, _] of this.syncedRevs) {
-				if (!this.app.vault.getAbstractFileByPath(localPath)) {
-					const remotePath = this.toRemotePath(localPath);
-					if (remotePath) {
-						await this.dbx.deleteFile(remotePath).catch(() => {});
-						this.syncedRevs.delete(localPath);
-						deleted++;
-					}
-				}
-			}
-
-			if (downloaded === 0 && deleted === 0) {
+			if (downloaded === 0) {
 				new Notice("☁️ 最新の状態です");
 			} else {
-				const parts = [];
-				if (downloaded > 0) parts.push(`${downloaded}件更新`);
-				if (deleted > 0) parts.push(`${deleted}件削除`);
-				new Notice(`☁️ ${parts.join("・")}しました`);
+				new Notice(`☁️ ${downloaded}件のファイルを更新しました`);
 			}
 			this.startupDone = true;
 			this.saveRevs();
