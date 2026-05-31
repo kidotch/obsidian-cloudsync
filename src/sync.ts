@@ -22,7 +22,10 @@ export class SyncEngine {
 	) {}
 
 	loadRevs(revs: Record<string, string>) {
-		this.syncedRevs = new Map(Object.entries(revs ?? {}));
+		// キーを小文字に正規化してロード（大文字小文字混在データの移行）
+		this.syncedRevs = new Map(
+			Object.entries(revs ?? {}).map(([k, v]) => [k.toLowerCase(), v])
+		);
 	}
 
 	private saveRevs() {
@@ -79,16 +82,24 @@ export class SyncEngine {
 
 			// Dropboxで削除されたファイルをローカルからも削除
 			const deletedFiles: string[] = [];
-			const locallyDeleted = new Set<string>(); // 今回削除したパス（アップロードをスキップ用）
+			const locallyDeleted = new Set<string>();
+			// 実際のファイル一覧を小文字パス→ファイルのマップで持つ
+			const allFilesNow = this.app.vault.getFiles();
+			const fileByLower = new Map(allFilesNow.map(f => [f.path.toLowerCase(), f]));
+
 			for (const [lowerPath] of this.syncedRevs) {
 				if (remotePathLower.has(lowerPath)) continue;
-				if (await this.app.vault.adapter.exists(lowerPath)) {
-					await this.app.vault.adapter.remove(lowerPath);
-					this.syncedRevs.delete(lowerPath);
-					locallyDeleted.add(lowerPath);
-					deletedFiles.push(lowerPath);
+				const actualFile = fileByLower.get(lowerPath);
+				if (actualFile) {
+					try {
+						await this.app.vault.adapter.remove(actualFile.path); // 正確なケースで削除
+						this.syncedRevs.delete(lowerPath);
+						locallyDeleted.add(lowerPath);
+						deletedFiles.push(actualFile.path);
+					} catch (e) {
+						console.error(`CloudSync: 削除失敗 ${actualFile.path}:`, e);
+					}
 				} else {
-					// ファイルが既に存在しない場合もsyncedRevsから除去
 					this.syncedRevs.delete(lowerPath);
 				}
 			}
