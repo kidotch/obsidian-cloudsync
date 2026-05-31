@@ -316,7 +316,7 @@ ${preview}${more}`, 6e3);
     await this.dbx.upload(remotePath, content);
   }
   async appendLog(files) {
-    const logPath = "CloudSync Log.md";
+    const logPath = "cloudsync-log.md";
     const now = (/* @__PURE__ */ new Date()).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" });
     const lines = [`
 ## ${now}

@@ -173,7 +173,7 @@ export class SyncEngine {
 	}
 
 	private async appendLog(files: string[]): Promise<void> {
-		const logPath = "CloudSync Log.md";
+		const logPath = "cloudsync-log.md";
 		const now = new Date().toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" });
 		const lines = [`\n## ${now}\n`, ...files.map(f => `- ${f}`)].join("\n");
 		try {
