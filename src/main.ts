@@ -27,7 +27,7 @@ export default class CloudSyncPlugin extends Plugin {
 			if (this.isReady()) {
 				setTimeout(async () => {
 					await this.engine.loadIgnoreFile();
-					await this.engine.pullOnStartup();
+					await this.engine.sync();
 				}, 3000);
 			}
 		});
@@ -84,7 +84,7 @@ export default class CloudSyncPlugin extends Plugin {
 			new Notice("CloudSync: 設定を完了してください");
 			return;
 		}
-		await this.engine.pullOnStartup();
+		await this.engine.sync();
 	}
 
 	private isReady(): boolean {
@@ -106,12 +106,14 @@ export default class CloudSyncPlugin extends Plugin {
 			this.app,
 			this.client,
 			this.settings.remotePath,
-			async (revs) => {
-				this.settings.syncedRevs = revs;
+			async (state) => {
+				this.settings.cursor = state.cursor;
+				this.settings.syncedFiles = state.syncedFiles;
+				delete this.settings.syncedRevs; // 旧形式は破棄
 				await this.saveData(this.settings);
 			}
 		);
-		this.engine.loadRevs(this.settings.syncedRevs ?? {});
+		this.engine.loadState(this.settings);
 	}
 
 	async loadSettings() {

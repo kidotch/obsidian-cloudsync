@@ -12,10 +12,26 @@ export interface DropboxSettings {
 }
 
 export interface FileEntry {
-	path: string;
+	path: string;      // path_display（大文字小文字を保持）
+	pathLower: string; // path_lower（Dropboxの正準キー）
 	rev: string;
 	serverModified: string;
 	size: number;
+}
+
+// 差分（delta）エントリ。ファイル・削除の両方を表す
+export interface DeltaEntry {
+	tag: "file" | "deleted";
+	path: string;      // path_display
+	pathLower: string; // path_lower
+	rev?: string;
+	serverModified?: string;
+	size?: number;
+}
+
+export interface DeltaResult {
+	entries: DeltaEntry[];
+	cursor: string;
 }
 
 // HTTPヘッダー用に非ASCII文字をUnicodeエスケープ
@@ -108,6 +124,7 @@ export class DropboxClient {
 				if (entry[".tag"] === "file") {
 					results.push({
 						path: entry.path_display, // 大文字小文字を保持
+						pathLower: entry.path_lower,
 						rev: entry.rev,
 						serverModified: entry.server_modified,
 						size: entry.size,
@@ -123,6 +140,59 @@ export class DropboxClient {
 			});
 		}
 		return results;
+	}
+
+	// ────────────────────────────────────────────
+	// 差分同期（cursor / delta）
+	// ────────────────────────────────────────────
+
+	// 現時点の最新 cursor を取得（以降の変更だけを追跡する起点）
+	async getLatestCursor(): Promise<string> {
+		const headers = await this.authHeader();
+		const res = await requestUrl({
+			url: "https://api.dropboxapi.com/2/files/list_folder/get_latest_cursor",
+			method: "POST",
+			headers: { ...headers, "Content-Type": "application/json" },
+			body: JSON.stringify({ path: this.settings.remotePath, recursive: true }),
+		});
+		return res.json.cursor;
+	}
+
+	// cursor 以降の変更（追加・更新・削除）を取得し、新しい cursor を返す
+	async listDelta(cursor: string): Promise<DeltaResult> {
+		const headers = await this.authHeader();
+		const entries: DeltaEntry[] = [];
+		let c = cursor;
+		while (true) {
+			const res = await requestUrl({
+				url: "https://api.dropboxapi.com/2/files/list_folder/continue",
+				method: "POST",
+				headers: { ...headers, "Content-Type": "application/json" },
+				body: JSON.stringify({ cursor: c }),
+			});
+			for (const entry of res.json.entries) {
+				const tag = entry[".tag"];
+				if (tag === "file") {
+					entries.push({
+						tag: "file",
+						path: entry.path_display,
+						pathLower: entry.path_lower,
+						rev: entry.rev,
+						serverModified: entry.server_modified,
+						size: entry.size,
+					});
+				} else if (tag === "deleted") {
+					entries.push({
+						tag: "deleted",
+						path: entry.path_display,
+						pathLower: entry.path_lower,
+					});
+				}
+			}
+			c = res.json.cursor;
+			if (!res.json.has_more) break;
+		}
+		return { entries, cursor: c };
 	}
 
 	// ────────────────────────────────────────────

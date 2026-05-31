@@ -107,6 +107,7 @@ var DropboxClient = class {
           results.push({
             path: entry.path_display,
             // 大文字小文字を保持
+            pathLower: entry.path_lower,
             rev: entry.rev,
             serverModified: entry.server_modified,
             size: entry.size
@@ -122,6 +123,56 @@ var DropboxClient = class {
       });
     }
     return results;
+  }
+  // ────────────────────────────────────────────
+  // 差分同期（cursor / delta）
+  // ────────────────────────────────────────────
+  // 現時点の最新 cursor を取得（以降の変更だけを追跡する起点）
+  async getLatestCursor() {
+    const headers = await this.authHeader();
+    const res = await (0, import_obsidian.requestUrl)({
+      url: "https://api.dropboxapi.com/2/files/list_folder/get_latest_cursor",
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ path: this.settings.remotePath, recursive: true })
+    });
+    return res.json.cursor;
+  }
+  // cursor 以降の変更（追加・更新・削除）を取得し、新しい cursor を返す
+  async listDelta(cursor) {
+    const headers = await this.authHeader();
+    const entries = [];
+    let c = cursor;
+    while (true) {
+      const res = await (0, import_obsidian.requestUrl)({
+        url: "https://api.dropboxapi.com/2/files/list_folder/continue",
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ cursor: c })
+      });
+      for (const entry of res.json.entries) {
+        const tag = entry[".tag"];
+        if (tag === "file") {
+          entries.push({
+            tag: "file",
+            path: entry.path_display,
+            pathLower: entry.path_lower,
+            rev: entry.rev,
+            serverModified: entry.server_modified,
+            size: entry.size
+          });
+        } else if (tag === "deleted") {
+          entries.push({
+            tag: "deleted",
+            path: entry.path_display,
+            pathLower: entry.path_lower
+          });
+        }
+      }
+      c = res.json.cursor;
+      if (!res.json.has_more) break;
+    }
+    return { entries, cursor: c };
   }
   // ────────────────────────────────────────────
   // アップロード
@@ -176,28 +227,42 @@ var DropboxClient = class {
 // src/sync.ts
 var import_obsidian2 = require("obsidian");
 var SyncEngine = class {
-  // lowerPath → content hash
-  constructor(app, dbx, remotePath, onSaveRevs) {
+  constructor(app, dbx, remotePath, onSaveState) {
     this.app = app;
     this.dbx = dbx;
     this.remotePath = remotePath;
-    this.onSaveRevs = onSaveRevs;
+    this.onSaveState = onSaveState;
     this.debounceTimers = /* @__PURE__ */ new Map();
     this.debounceMs = 5e3;
-    this.syncedRevs = /* @__PURE__ */ new Map();
+    this.cursor = "";
+    this.syncedFiles = /* @__PURE__ */ new Map();
+    // path_lower → 状態
     this.downloading = /* @__PURE__ */ new Set();
     this.startupDone = false;
+    this.syncing = false;
     this.ignorePatterns = [];
-    this.syncedHashes = /* @__PURE__ */ new Map();
   }
-  loadRevs(revs) {
-    this.syncedRevs = new Map(
-      Object.entries(revs != null ? revs : {}).map(([k, v]) => [k.toLowerCase(), v])
-    );
+  // 旧 syncedRevs（lower→rev）を含めて状態をロード・移行する
+  loadState(state) {
+    var _a, _b, _c;
+    this.cursor = (_a = state.cursor) != null ? _a : "";
+    this.syncedFiles = /* @__PURE__ */ new Map();
+    for (const [k, v] of Object.entries((_b = state.syncedFiles) != null ? _b : {})) {
+      this.syncedFiles.set(k.toLowerCase(), v);
+    }
+    for (const [k, rev] of Object.entries((_c = state.syncedRevs) != null ? _c : {})) {
+      const lower = k.toLowerCase();
+      if (!this.syncedFiles.has(lower)) {
+        this.syncedFiles.set(lower, { rev, hash: "", path: k });
+      }
+    }
   }
-  saveRevs() {
+  saveState() {
     var _a;
-    (_a = this.onSaveRevs) == null ? void 0 : _a.call(this, Object.fromEntries(this.syncedRevs));
+    (_a = this.onSaveState) == null ? void 0 : _a.call(this, {
+      cursor: this.cursor,
+      syncedFiles: Object.fromEntries(this.syncedFiles)
+    });
   }
   async loadIgnoreFile() {
     try {
@@ -208,120 +273,191 @@ var SyncEngine = class {
     }
   }
   // ────────────────────────────────────────────
-  // 起動時同期（Dropbox → ローカル）
+  // 同期エントリーポイント（起動時・手動 共通）
   // ────────────────────────────────────────────
-  async pullOnStartup(retry = 0) {
+  async sync(retry = 0) {
+    if (this.syncing) {
+      new import_obsidian2.Notice("\u2601\uFE0F \u540C\u671F\u4E2D\u3067\u3059\u2026");
+      return;
+    }
+    this.syncing = true;
     new import_obsidian2.Notice("\u2601\uFE0F \u540C\u671F\u4E2D...");
     await this.loadIgnoreFile();
     try {
-      const remoteFiles = await this.dbx.listFiles();
-      const remotePathLower = new Map(
-        remoteFiles.map((f) => {
-          const lp = this.toLocalPath(f.path);
-          return lp ? [lp.toLowerCase(), f] : null;
-        }).filter(Boolean)
-      );
-      const updatedFiles = [];
-      const uploadedFiles = [];
-      for (const remote of remoteFiles) {
-        const localPath = this.toLocalPath(remote.path);
-        if (!localPath) continue;
-        const localFile = this.app.vault.getAbstractFileByPath(localPath);
-        const syncedRev = this.syncedRevs.get(localPath.toLowerCase());
-        if (syncedRev === remote.rev) continue;
-        if (!localFile || await this.isRemoteNewer(localFile, remote)) {
-          await this.downloadFile(remote.path, localPath);
-          this.syncedRevs.set(localPath.toLowerCase(), remote.rev);
-          updatedFiles.push(localPath);
-        } else {
-          this.syncedRevs.set(localPath.toLowerCase(), remote.rev);
-        }
+      const updated = [];
+      const deleted = [];
+      if (!this.cursor) {
+        await this.fullSync(updated, deleted);
+      } else {
+        await this.deltaSync(updated, deleted);
       }
-      const deletedFiles = [];
-      const locallyDeleted = /* @__PURE__ */ new Set();
-      const allFilesNow = this.app.vault.getFiles();
-      const fileByLower = new Map(allFilesNow.map((f) => [f.path.toLowerCase(), f]));
-      for (const [lowerPath] of this.syncedRevs) {
-        if (remotePathLower.has(lowerPath)) continue;
-        const actualFile = fileByLower.get(lowerPath);
-        if (actualFile) {
-          try {
-            await this.app.vault.adapter.remove(actualFile.path);
-            this.syncedRevs.delete(lowerPath);
-            locallyDeleted.add(lowerPath);
-            deletedFiles.push(actualFile.path);
-          } catch (e) {
-            console.error(`CloudSync: \u524A\u9664\u5931\u6557 ${actualFile.path}:`, e);
-          }
-        } else {
-          this.syncedRevs.delete(lowerPath);
-        }
-      }
-      const allLocalFiles = this.app.vault.getFiles();
-      for (const file of allLocalFiles) {
-        if (this.isExcluded(file.path)) continue;
-        if (remotePathLower.has(file.path.toLowerCase())) continue;
-        if (locallyDeleted.has(file.path.toLowerCase())) continue;
-        const remotePath = this.toRemotePath(file.path);
-        if (!remotePath) continue;
-        const content = await this.app.vault.readBinary(file).catch(() => null);
-        if (!content) continue;
-        const hash = await this.hashContent(content);
-        const rev = await this.dbx.upload(remotePath, content);
-        this.syncedRevs.set(file.path.toLowerCase(), rev);
-        this.syncedHashes.set(file.path.toLowerCase(), hash);
-        uploadedFiles.push(file.path);
-      }
-      for (const path of uploadedFiles) {
-        const timer = this.debounceTimers.get(path);
-        if (timer) {
-          clearTimeout(timer);
-          this.debounceTimers.delete(path);
-        }
-      }
-      const total = updatedFiles.length + uploadedFiles.length + deletedFiles.length;
+      const uploaded = await this.pushLocalChanges();
+      this.startupDone = true;
+      this.saveState();
+      const total = updated.length + uploaded.length + deleted.length;
       if (total === 0) {
         new import_obsidian2.Notice("\u2601\uFE0F \u6700\u65B0\u306E\u72B6\u614B\u3067\u3059");
       } else {
-        const logEntries = [
-          ...updatedFiles.map((f) => ({ path: f, action: "\u2193\u53D6\u5F97" })),
-          ...uploadedFiles.map((f) => ({ path: f, action: "\u2191\u9001\u4FE1" })),
-          ...deletedFiles.map((f) => ({ path: f, action: "\u{1F5D1}\u524A\u9664" }))
+        const entries = [
+          ...updated.map((f) => ({ path: f, action: "\u2193\u53D6\u5F97" })),
+          ...uploaded.map((f) => ({ path: f, action: "\u2191\u9001\u4FE1" })),
+          ...deleted.map((f) => ({ path: f, action: "\u{1F5D1}\u524A\u9664" }))
         ];
-        const preview = logEntries.slice(0, 3).map((e) => `\u2022 ${e.action} ${e.path.split("/").pop()}`).join("\n");
-        const more = logEntries.length > 3 ? `
-\u4ED6 ${logEntries.length - 3} \u4EF6` : "";
+        const preview = entries.slice(0, 3).map((e) => `\u2022 ${e.action} ${e.path.split("/").pop()}`).join("\n");
+        const more = entries.length > 3 ? `
+\u4ED6 ${entries.length - 3} \u4EF6` : "";
         new import_obsidian2.Notice(`\u2601\uFE0F ${total}\u4EF6\u3092\u540C\u671F\u3057\u307E\u3057\u305F
 ${preview}${more}`, 6e3);
-        await this.appendLog(logEntries);
+        await this.appendLog(entries);
       }
-      this.startupDone = true;
-      this.saveRevs();
     } catch (e) {
       if (retry < 2) {
+        this.syncing = false;
         new import_obsidian2.Notice(`\u2601\uFE0F \u540C\u671F\u30EA\u30C8\u30E9\u30A4\u4E2D... (${retry + 1}/2)`);
-        setTimeout(() => this.pullOnStartup(retry + 1), 5e3);
-      } else {
-        this.startupDone = true;
-        new import_obsidian2.Notice(`\u2601\uFE0F \u540C\u671F\u30A8\u30E9\u30FC: ${e.message}`);
-        console.error("CloudSync pull error:", e);
+        setTimeout(() => this.sync(retry + 1), 5e3);
+        return;
+      }
+      this.startupDone = true;
+      new import_obsidian2.Notice(`\u2601\uFE0F \u540C\u671F\u30A8\u30E9\u30FC: ${e.message}`);
+      console.error("CloudSync sync error:", e);
+    } finally {
+      this.syncing = false;
+    }
+  }
+  // ────────────────────────────────────────────
+  // 初回フル照合（cursor 未保持時のみ）
+  // ────────────────────────────────────────────
+  async fullSync(updated, deleted) {
+    var _a, _b;
+    const latestCursor = await this.dbx.getLatestCursor();
+    const remoteFiles = await this.dbx.listFiles();
+    const remoteByLower = /* @__PURE__ */ new Map();
+    for (const f of remoteFiles) {
+      const lp = this.toLocalPath(f.path);
+      if (lp) remoteByLower.set(lp.toLowerCase(), f);
+    }
+    const fileByLower = this.buildFileMap();
+    for (const remote of remoteFiles) {
+      const localPath = this.toLocalPath(remote.path);
+      if (!localPath) continue;
+      const lower = localPath.toLowerCase();
+      const state = this.syncedFiles.get(lower);
+      if (state && state.rev === remote.rev) {
+        if (!state.hash) {
+          const lf = fileByLower.get(lower);
+          if (lf) {
+            const content = await this.app.vault.readBinary(lf).catch(() => null);
+            if (content) {
+              state.hash = await this.hashContent(content);
+              state.path = remote.path;
+              this.syncedFiles.set(lower, state);
+            }
+          }
+        }
+        continue;
+      }
+      const localFile = fileByLower.get(lower);
+      if (!localFile || await this.isRemoteNewer(localFile, remote)) {
+        await this.downloadFile(remote.path, (_a = localFile == null ? void 0 : localFile.path) != null ? _a : localPath);
+        const content = await this.app.vault.adapter.readBinary((_b = localFile == null ? void 0 : localFile.path) != null ? _b : localPath);
+        this.syncedFiles.set(lower, {
+          rev: remote.rev,
+          hash: await this.hashContent(content),
+          path: remote.path
+        });
+        updated.push(localPath);
       }
     }
+    for (const [lower] of [...this.syncedFiles]) {
+      if (remoteByLower.has(lower)) continue;
+      const lf = fileByLower.get(lower);
+      if (lf) {
+        try {
+          await this.app.vault.adapter.remove(lf.path);
+          deleted.push(lf.path);
+        } catch (e) {
+          console.error(`CloudSync: \u524A\u9664\u5931\u6557 ${lf.path}:`, e);
+        }
+      }
+      this.syncedFiles.delete(lower);
+    }
+    this.cursor = latestCursor;
+  }
+  // ────────────────────────────────────────────
+  // 差分同期（cursor 保持時）
+  // ────────────────────────────────────────────
+  async deltaSync(updated, deleted) {
+    var _a, _b;
+    const { entries, cursor } = await this.dbx.listDelta(this.cursor);
+    const fileByLower = this.buildFileMap();
+    for (const entry of entries) {
+      const localPath = this.toLocalPath(entry.path);
+      if (!localPath) continue;
+      const lower = localPath.toLowerCase();
+      if (entry.tag === "deleted") {
+        const state2 = this.syncedFiles.get(lower);
+        if (!state2) continue;
+        const lf2 = fileByLower.get(lower);
+        if (lf2) {
+          try {
+            await this.app.vault.adapter.remove(lf2.path);
+            deleted.push(lf2.path);
+          } catch (e) {
+            console.error(`CloudSync: \u524A\u9664\u5931\u6557 ${lf2.path}:`, e);
+          }
+        }
+        this.syncedFiles.delete(lower);
+        continue;
+      }
+      const state = this.syncedFiles.get(lower);
+      if (state && state.rev === entry.rev) continue;
+      const lf = fileByLower.get(lower);
+      if (lf && state) {
+        const cur = await this.app.vault.readBinary(lf).catch(() => null);
+        if (cur && await this.hashContent(cur) !== state.hash) {
+          await this.makeConflictCopy(lf);
+        }
+      }
+      await this.downloadFile(entry.path, (_a = lf == null ? void 0 : lf.path) != null ? _a : localPath);
+      const content = await this.app.vault.adapter.readBinary((_b = lf == null ? void 0 : lf.path) != null ? _b : localPath);
+      this.syncedFiles.set(lower, {
+        rev: entry.rev,
+        hash: await this.hashContent(content),
+        path: entry.path
+      });
+      updated.push(localPath);
+    }
+    this.cursor = cursor;
+  }
+  // ────────────────────────────────────────────
+  // local → remote（変化したローカルファイルをまとめて反映）
+  // ────────────────────────────────────────────
+  async pushLocalChanges() {
+    const uploaded = [];
+    for (const file of this.app.vault.getFiles()) {
+      if (this.isExcluded(file.path)) continue;
+      const remotePath = this.toRemotePath(file.path);
+      if (!remotePath) continue;
+      const content = await this.app.vault.readBinary(file).catch(() => null);
+      if (!content) continue;
+      const hash = await this.hashContent(content);
+      const lower = file.path.toLowerCase();
+      const state = this.syncedFiles.get(lower);
+      if (state && state.hash === hash) continue;
+      const rev = await this.dbx.upload(remotePath, content);
+      this.syncedFiles.set(lower, { rev, hash, path: file.path });
+      uploaded.push(file.path);
+      const t = this.debounceTimers.get(lower);
+      if (t) {
+        clearTimeout(t);
+        this.debounceTimers.delete(lower);
+      }
+    }
+    return uploaded;
   }
   // ────────────────────────────────────────────
   // 編集時アップロード（デバウンス付き）
   // ────────────────────────────────────────────
-  isExcluded(path) {
-    for (const pattern of this.ignorePatterns) {
-      if (pattern.endsWith("/") && path.startsWith(pattern)) return true;
-      if (pattern.includes("*")) {
-        const re = new RegExp("^" + pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$");
-        if (re.test(path)) return true;
-      }
-      if (path === pattern) return true;
-    }
-    return false;
-  }
   scheduleUpload(file) {
     if (!this.startupDone) return;
     if (this.isExcluded(file.path)) return;
@@ -332,16 +468,14 @@ ${preview}${more}`, 6e3);
     const timer = setTimeout(async () => {
       this.debounceTimers.delete(key);
       const name = file.name;
-      const lowerPath = key;
       try {
         const content = await this.app.vault.readBinary(file);
         const hash = await this.hashContent(content);
-        if (this.syncedHashes.get(lowerPath) === hash) return;
+        const state = this.syncedFiles.get(key);
+        if (state && state.hash === hash) return;
         const rev = await this.dbx.upload(this.toRemotePath(file.path), content);
-        if (rev) {
-          this.syncedRevs.set(lowerPath, rev);
-          this.syncedHashes.set(lowerPath, hash);
-        }
+        this.syncedFiles.set(key, { rev, hash, path: file.path });
+        this.saveState();
         new import_obsidian2.Notice(`\u2601\uFE0F ${name} \u3092\u30A2\u30C3\u30D7\u30ED\u30FC\u30C9\u3057\u307E\u3057\u305F`);
       } catch (e) {
         new import_obsidian2.Notice(`CloudSync: \u30A2\u30C3\u30D7\u30ED\u30FC\u30C9\u5931\u6557 (${name}): ${e.message}`);
@@ -352,19 +486,37 @@ ${preview}${more}`, 6e3);
   }
   // デバウンス中の全ファイルを即時アップロード（終了時用）
   async flushPending() {
-    const paths = [...this.debounceTimers.keys()];
-    if (paths.length === 0) return;
-    new import_obsidian2.Notice(`\u2601\uFE0F ${paths.length}\u4EF6\u3092\u4FDD\u5B58\u4E2D...`);
-    for (const path of paths) {
-      clearTimeout(this.debounceTimers.get(path));
-      this.debounceTimers.delete(path);
-      const file = this.app.vault.getAbstractFileByPath(path);
-      if (file) await this.uploadFile(file).catch(console.error);
+    var _a;
+    const keys = [...this.debounceTimers.keys()];
+    if (keys.length === 0) return;
+    for (const key of keys) {
+      clearTimeout(this.debounceTimers.get(key));
+      this.debounceTimers.delete(key);
+      const state = this.syncedFiles.get(key);
+      const file = this.app.vault.getAbstractFileByPath((_a = state == null ? void 0 : state.path) != null ? _a : key);
+      if (!file) continue;
+      try {
+        const content = await this.app.vault.readBinary(file);
+        const hash = await this.hashContent(content);
+        if (state && state.hash === hash) continue;
+        const rev = await this.dbx.upload(this.toRemotePath(file.path), content);
+        this.syncedFiles.set(key, { rev, hash, path: file.path });
+      } catch (e) {
+        console.error(`CloudSync flush error (${key}):`, e);
+      }
     }
-    new import_obsidian2.Notice("\u2601\uFE0F \u4FDD\u5B58\u5B8C\u4E86");
+    this.saveState();
   }
   // 削除をDropboxに反映
   async handleDelete(path) {
+    const lower = path.toLowerCase();
+    this.syncedFiles.delete(lower);
+    const t = this.debounceTimers.get(lower);
+    if (t) {
+      clearTimeout(t);
+      this.debounceTimers.delete(lower);
+    }
+    this.saveState();
     const remotePath = this.toRemotePath(path);
     if (!remotePath) return;
     try {
@@ -376,20 +528,50 @@ ${preview}${more}`, 6e3);
   // 名前変更・移動
   async handleRename(file, oldPath) {
     await this.handleDelete(oldPath);
-    await this.uploadFile(file);
+    try {
+      const content = await this.app.vault.readBinary(file);
+      const hash = await this.hashContent(content);
+      const rev = await this.dbx.upload(this.toRemotePath(file.path), content);
+      this.syncedFiles.set(file.path.toLowerCase(), { rev, hash, path: file.path });
+      this.saveState();
+    } catch (e) {
+      console.error(`CloudSync rename error (${file.path}):`, e);
+    }
   }
   // ────────────────────────────────────────────
   // 内部処理
   // ────────────────────────────────────────────
+  // vault の全ファイルを path_lower → TFile のマップにする
+  buildFileMap() {
+    return new Map(this.app.vault.getFiles().map((f) => [f.path.toLowerCase(), f]));
+  }
+  isExcluded(path) {
+    for (const pattern of this.ignorePatterns) {
+      if (pattern.endsWith("/") && path.startsWith(pattern)) return true;
+      if (pattern.includes("*")) {
+        const re = new RegExp("^" + pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$");
+        if (re.test(path)) return true;
+      }
+      if (path === pattern) return true;
+    }
+    return false;
+  }
+  async makeConflictCopy(file) {
+    try {
+      const content = await this.app.vault.readBinary(file);
+      const dot = file.path.lastIndexOf(".");
+      const base = dot > 0 ? file.path.slice(0, dot) : file.path;
+      const ext = dot > 0 ? file.path.slice(dot) : "";
+      const ts = (/* @__PURE__ */ new Date()).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }).replace(/[/:]/g, "-");
+      const conflictPath = `${base} (\u7AF6\u5408 ${ts})${ext}`;
+      await this.app.vault.adapter.writeBinary(conflictPath, content);
+    } catch (e) {
+      console.error(`CloudSync conflict copy error (${file.path}):`, e);
+    }
+  }
   async hashContent(content) {
     const buf = await crypto.subtle.digest("SHA-256", content);
     return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
-  }
-  async uploadFile(file) {
-    const remotePath = this.toRemotePath(file.path);
-    if (!remotePath) return null;
-    const content = await this.app.vault.readBinary(file);
-    return await this.dbx.upload(remotePath, content);
   }
   async appendLog(entries) {
     const logPath = "cloudsync-log.md";
@@ -442,7 +624,8 @@ var DEFAULT_SETTINGS = {
   appSecret: "",
   refreshToken: "",
   remotePath: "/base",
-  syncedRevs: {}
+  cursor: "",
+  syncedFiles: {}
 };
 var CloudSyncSettingTab = class extends import_obsidian3.PluginSettingTab {
   constructor(app, plugin) {
@@ -518,7 +701,7 @@ var CloudSyncPlugin = class extends import_obsidian4.Plugin {
       if (this.isReady()) {
         setTimeout(async () => {
           await this.engine.loadIgnoreFile();
-          await this.engine.pullOnStartup();
+          await this.engine.sync();
         }, 3e3);
       }
     });
@@ -561,13 +744,12 @@ var CloudSyncPlugin = class extends import_obsidian4.Plugin {
       new import_obsidian4.Notice("CloudSync: \u8A2D\u5B9A\u3092\u5B8C\u4E86\u3057\u3066\u304F\u3060\u3055\u3044");
       return;
     }
-    await this.engine.pullOnStartup();
+    await this.engine.sync();
   }
   isReady() {
     return !!(this.settings.appKey && this.settings.appSecret && this.settings.refreshToken);
   }
   initClient() {
-    var _a;
     this.client = new DropboxClient({
       appKey: this.settings.appKey,
       appSecret: this.settings.appSecret,
@@ -578,12 +760,14 @@ var CloudSyncPlugin = class extends import_obsidian4.Plugin {
       this.app,
       this.client,
       this.settings.remotePath,
-      async (revs) => {
-        this.settings.syncedRevs = revs;
+      async (state) => {
+        this.settings.cursor = state.cursor;
+        this.settings.syncedFiles = state.syncedFiles;
+        delete this.settings.syncedRevs;
         await this.saveData(this.settings);
       }
     );
-    this.engine.loadRevs((_a = this.settings.syncedRevs) != null ? _a : {});
+    this.engine.loadState(this.settings);
   }
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());

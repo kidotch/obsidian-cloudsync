@@ -1,12 +1,21 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type CloudSyncPlugin from "./main";
 
+// 1ファイルの同期状態。キーは path_lower（Dropboxの正準キー）で管理する
+export interface FileState {
+	rev: string;   // 最後に同期した Dropbox rev（自分のアップロードのecho判定に使う）
+	hash: string;  // 最後に同期した内容の SHA-256（不要アップロード防止）
+	path: string;  // path_display（実際の大文字小文字）
+}
+
 export interface CloudSyncSettings {
 	appKey: string;
 	appSecret: string;
 	refreshToken: string;
 	remotePath: string;
-	syncedRevs: Record<string, string>;
+	cursor: string;                          // Dropbox delta cursor（差分同期の起点）
+	syncedFiles: Record<string, FileState>;  // path_lower → 状態
+	syncedRevs?: Record<string, string>;     // 旧形式（移行用、廃止予定）
 }
 
 export const DEFAULT_SETTINGS: CloudSyncSettings = {
@@ -14,7 +23,8 @@ export const DEFAULT_SETTINGS: CloudSyncSettings = {
 	appSecret: "",
 	refreshToken: "",
 	remotePath: "/base",
-	syncedRevs: {},
+	cursor: "",
+	syncedFiles: {},
 };
 
 export class CloudSyncSettingTab extends PluginSettingTab {
