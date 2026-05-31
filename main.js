@@ -207,6 +207,7 @@ var SyncEngine = class {
   // ────────────────────────────────────────────
   async pullOnStartup(retry = 0) {
     new import_obsidian2.Notice("\u2601\uFE0F \u540C\u671F\u4E2D...");
+    await this.loadIgnoreFile();
     try {
       const remoteFiles = await this.dbx.listFiles();
       const updatedFiles = [];

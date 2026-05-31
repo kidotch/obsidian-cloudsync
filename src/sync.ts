@@ -46,6 +46,7 @@ export class SyncEngine {
 
 	async pullOnStartup(retry = 0): Promise<void> {
 		new Notice("☁️ 同期中...");
+		await this.loadIgnoreFile(); // 毎回最新のignoreを読み込む
 		try {
 			const remoteFiles = await this.dbx.listFiles();
 			const updatedFiles: string[] = [];
