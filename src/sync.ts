@@ -13,7 +13,7 @@ export class SyncEngine {
 	private downloading = new Set<string>();
 	private startupDone = false;
 	private ignorePatterns: string[] = [];
-	private recentUploads = new Map<string, number>(); // lowerPath → timestamp
+	private syncedHashes = new Map<string, string>(); // lowerPath → content hash
 
 	constructor(
 		private app: App,
@@ -115,9 +115,10 @@ export class SyncEngine {
 				if (!remotePath) continue;
 				const content = await this.app.vault.readBinary(file).catch(() => null);
 				if (!content) continue; // 読み込めない場合はスキップ
+				const hash = await this.hashContent(content);
 				const rev = await this.dbx.upload(remotePath, content);
 				this.syncedRevs.set(file.path.toLowerCase(), rev);
-				this.recentUploads.set(file.path.toLowerCase(), Date.now());
+				this.syncedHashes.set(file.path.toLowerCase(), hash);
 				uploadedFiles.push(file.path);
 			}
 
@@ -175,27 +176,28 @@ export class SyncEngine {
 		if (!this.startupDone) return;
 		if (this.isExcluded(file.path)) return;
 		if (this.downloading.has(file.path)) return;
-		// 10秒以内にアップロード済みならスキップ（自動保存による二重アップロード防止）
-		const lastUpload = this.recentUploads.get(file.path.toLowerCase());
-		if (lastUpload && Date.now() - lastUpload < 10000) return;
 		const existing = this.debounceTimers.get(file.path);
 		if (existing) clearTimeout(existing);
 
-		const timer = setTimeout(() => {
+		const timer = setTimeout(async () => {
 			this.debounceTimers.delete(file.path);
 			const name = file.name;
-			this.uploadFile(file)
-				.then(rev => {
-					if (rev) {
-						this.syncedRevs.set(file.path.toLowerCase(), rev);
-						this.recentUploads.set(file.path.toLowerCase(), Date.now());
-					}
-					new Notice(`☁️ ${name} をアップロードしました`);
-				})
-				.catch(e => {
-					new Notice(`CloudSync: アップロード失敗 (${name}): ${e.message}`);
-					console.error(`CloudSync upload error (${file.path}):`, e);
-				});
+			const lowerPath = file.path.toLowerCase();
+			try {
+				const content = await this.app.vault.readBinary(file);
+				const hash = await this.hashContent(content);
+				// 内容が変わっていなければスキップ（自動保存による不要アップロード防止）
+				if (this.syncedHashes.get(lowerPath) === hash) return;
+				const rev = await this.dbx.upload(this.toRemotePath(file.path)!, content);
+				if (rev) {
+					this.syncedRevs.set(lowerPath, rev);
+					this.syncedHashes.set(lowerPath, hash);
+				}
+				new Notice(`☁️ ${name} をアップロードしました`);
+			} catch (e) {
+				new Notice(`CloudSync: アップロード失敗 (${name}): ${e.message}`);
+				console.error(`CloudSync upload error (${file.path}):`, e);
+			}
 		}, this.debounceMs);
 
 		this.debounceTimers.set(file.path, timer);
@@ -235,6 +237,11 @@ export class SyncEngine {
 	// ────────────────────────────────────────────
 	// 内部処理
 	// ────────────────────────────────────────────
+
+	private async hashContent(content: ArrayBuffer): Promise<string> {
+		const buf = await crypto.subtle.digest("SHA-256", content);
+		return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+	}
 
 	private async uploadFile(file: TFile): Promise<string | null> {
 		const remotePath = this.toRemotePath(file.path);
