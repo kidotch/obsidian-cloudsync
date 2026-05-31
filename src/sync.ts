@@ -434,12 +434,20 @@ export class SyncEngine {
 
 	private async appendLog(entries: { path: string; action: "↓取得" | "↑送信" | "🗑削除" }[]): Promise<void> {
 		const logPath = "cloudsync-log.md";
+		const header = "# CloudSync Log";
 		const now = new Date().toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" });
-		const lines = [`\n## ${now}\n`, ...entries.map(e => `- ${e.action} ${e.path}`)].join("\n");
+		// 最新を先頭に置く（newest-first）。スマホで開いた瞬間に最新が見えるように
+		const block = [`## ${now}`, ...entries.map(e => `- ${e.action} ${e.path}`)].join("\n");
 		try {
-			const existing = await this.app.vault.adapter.exists(logPath)
-				? await this.app.vault.adapter.read(logPath) : "# CloudSync Log\n";
-			await this.app.vault.adapter.write(logPath, existing + lines + "\n");
+			const prev = await this.app.vault.adapter.exists(logPath)
+				? await this.app.vault.adapter.read(logPath) : header + "\n";
+			// 既存のヘッダー行を外して本文（過去ログ）だけ取り出す
+			const rest = prev.startsWith(header)
+				? prev.slice(header.length).replace(/^\n+/, "")
+				: prev;
+			// ヘッダー → 今回の最新ブロック → 過去ログ の順で書き戻す
+			const out = `${header}\n\n${block}\n\n${rest}`.replace(/\n{3,}/g, "\n\n").replace(/\s+$/, "") + "\n";
+			await this.app.vault.adapter.write(logPath, out);
 		} catch (e) {
 			console.error("CloudSync log write error:", e);
 		}

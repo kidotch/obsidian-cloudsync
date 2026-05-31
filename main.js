@@ -614,13 +614,18 @@ ${preview}${more}`, 6e3);
   }
   async appendLog(entries) {
     const logPath = "cloudsync-log.md";
+    const header = "# CloudSync Log";
     const now = (/* @__PURE__ */ new Date()).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" });
-    const lines = [`
-## ${now}
-`, ...entries.map((e) => `- ${e.action} ${e.path}`)].join("\n");
+    const block = [`## ${now}`, ...entries.map((e) => `- ${e.action} ${e.path}`)].join("\n");
     try {
-      const existing = await this.app.vault.adapter.exists(logPath) ? await this.app.vault.adapter.read(logPath) : "# CloudSync Log\n";
-      await this.app.vault.adapter.write(logPath, existing + lines + "\n");
+      const prev = await this.app.vault.adapter.exists(logPath) ? await this.app.vault.adapter.read(logPath) : header + "\n";
+      const rest = prev.startsWith(header) ? prev.slice(header.length).replace(/^\n+/, "") : prev;
+      const out = `${header}
+
+${block}
+
+${rest}`.replace(/\n{3,}/g, "\n\n").replace(/\s+$/, "") + "\n";
+      await this.app.vault.adapter.write(logPath, out);
     } catch (e) {
       console.error("CloudSync log write error:", e);
     }
