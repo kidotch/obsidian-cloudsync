@@ -49,7 +49,13 @@ export class SyncEngine {
 		await this.loadIgnoreFile();
 		try {
 			const remoteFiles = await this.dbx.listFiles();
-			const remotePathSet = new Set(remoteFiles.map(f => this.toLocalPath(f.path)).filter(Boolean) as string[]);
+			// 大文字小文字を無視して比較するためすべて小文字で管理
+			const remotePathLower = new Map(
+				remoteFiles.map(f => {
+					const lp = this.toLocalPath(f.path);
+					return lp ? [lp.toLowerCase(), f] : null;
+				}).filter(Boolean) as [string, typeof remoteFiles[0]][]
+			);
 			const updatedFiles: string[] = [];
 			const uploadedFiles: string[] = [];
 
@@ -59,27 +65,26 @@ export class SyncEngine {
 				if (!localPath) continue;
 
 				const localFile = this.app.vault.getAbstractFileByPath(localPath);
-				const syncedRev = this.syncedRevs.get(localPath);
+				const syncedRev = this.syncedRevs.get(localPath.toLowerCase());
 				if (syncedRev === remote.rev) continue;
 
 				if (!localFile || await this.isRemoteNewer(localFile as TFile, remote)) {
 					await this.downloadFile(remote.path, localPath);
-					this.syncedRevs.set(localPath, remote.rev);
+					this.syncedRevs.set(localPath.toLowerCase(), remote.rev);
 					updatedFiles.push(localPath);
 				} else {
-					this.syncedRevs.set(localPath, remote.rev);
+					this.syncedRevs.set(localPath.toLowerCase(), remote.rev);
 				}
 			}
 
 			// Dropboxで削除されたファイルをローカルからも削除
-			// （syncedRevsにあるがDropboxにない＝他の端末で削除された）
 			const deletedFiles: string[] = [];
-			for (const [localPath] of this.syncedRevs) {
-				if (remotePathSet.has(localPath)) continue;
-				if (await this.app.vault.adapter.exists(localPath)) {
-					await this.app.vault.adapter.remove(localPath);
-					this.syncedRevs.delete(localPath);
-					deletedFiles.push(localPath);
+			for (const [lowerPath] of this.syncedRevs) {
+				if (remotePathLower.has(lowerPath)) continue;
+				if (await this.app.vault.adapter.exists(lowerPath)) {
+					await this.app.vault.adapter.remove(lowerPath);
+					this.syncedRevs.delete(lowerPath);
+					deletedFiles.push(lowerPath);
 				}
 			}
 
@@ -87,12 +92,12 @@ export class SyncEngine {
 			const allLocalFiles = this.app.vault.getFiles();
 			for (const file of allLocalFiles) {
 				if (this.isExcluded(file.path)) continue;
-				if (remotePathSet.has(file.path)) continue;
+				if (remotePathLower.has(file.path.toLowerCase())) continue;
 				const remotePath = this.toRemotePath(file.path);
 				if (!remotePath) continue;
 				const content = await this.app.vault.readBinary(file);
 				const rev = await this.dbx.upload(remotePath, content);
-				this.syncedRevs.set(file.path, rev);
+				this.syncedRevs.set(file.path.toLowerCase(), rev);
 				uploadedFiles.push(file.path);
 			}
 
@@ -147,7 +152,10 @@ export class SyncEngine {
 			this.debounceTimers.delete(file.path);
 			const name = file.name;
 			this.uploadFile(file)
-				.then(() => new Notice(`☁️ ${name} をアップロードしました`))
+				.then(rev => {
+					if (rev) this.syncedRevs.set(file.path.toLowerCase(), rev);
+					new Notice(`☁️ ${name} をアップロードしました`);
+				})
 				.catch(e => {
 					new Notice(`CloudSync: アップロード失敗 (${name}): ${e.message}`);
 					console.error(`CloudSync upload error (${file.path}):`, e);
@@ -192,11 +200,11 @@ export class SyncEngine {
 	// 内部処理
 	// ────────────────────────────────────────────
 
-	private async uploadFile(file: TFile): Promise<void> {
+	private async uploadFile(file: TFile): Promise<string | null> {
 		const remotePath = this.toRemotePath(file.path);
-		if (!remotePath) return;
+		if (!remotePath) return null;
 		const content = await this.app.vault.readBinary(file);
-		await this.dbx.upload(remotePath, content);
+		return await this.dbx.upload(remotePath, content);
 	}
 
 	private async appendLog(files: string[]): Promise<void> {

@@ -211,41 +211,46 @@ var SyncEngine = class {
     await this.loadIgnoreFile();
     try {
       const remoteFiles = await this.dbx.listFiles();
-      const remotePathSet = new Set(remoteFiles.map((f) => this.toLocalPath(f.path)).filter(Boolean));
+      const remotePathLower = new Map(
+        remoteFiles.map((f) => {
+          const lp = this.toLocalPath(f.path);
+          return lp ? [lp.toLowerCase(), f] : null;
+        }).filter(Boolean)
+      );
       const updatedFiles = [];
       const uploadedFiles = [];
       for (const remote of remoteFiles) {
         const localPath = this.toLocalPath(remote.path);
         if (!localPath) continue;
         const localFile = this.app.vault.getAbstractFileByPath(localPath);
-        const syncedRev = this.syncedRevs.get(localPath);
+        const syncedRev = this.syncedRevs.get(localPath.toLowerCase());
         if (syncedRev === remote.rev) continue;
         if (!localFile || await this.isRemoteNewer(localFile, remote)) {
           await this.downloadFile(remote.path, localPath);
-          this.syncedRevs.set(localPath, remote.rev);
+          this.syncedRevs.set(localPath.toLowerCase(), remote.rev);
           updatedFiles.push(localPath);
         } else {
-          this.syncedRevs.set(localPath, remote.rev);
+          this.syncedRevs.set(localPath.toLowerCase(), remote.rev);
         }
       }
       const deletedFiles = [];
-      for (const [localPath] of this.syncedRevs) {
-        if (remotePathSet.has(localPath)) continue;
-        if (await this.app.vault.adapter.exists(localPath)) {
-          await this.app.vault.adapter.remove(localPath);
-          this.syncedRevs.delete(localPath);
-          deletedFiles.push(localPath);
+      for (const [lowerPath] of this.syncedRevs) {
+        if (remotePathLower.has(lowerPath)) continue;
+        if (await this.app.vault.adapter.exists(lowerPath)) {
+          await this.app.vault.adapter.remove(lowerPath);
+          this.syncedRevs.delete(lowerPath);
+          deletedFiles.push(lowerPath);
         }
       }
       const allLocalFiles = this.app.vault.getFiles();
       for (const file of allLocalFiles) {
         if (this.isExcluded(file.path)) continue;
-        if (remotePathSet.has(file.path)) continue;
+        if (remotePathLower.has(file.path.toLowerCase())) continue;
         const remotePath = this.toRemotePath(file.path);
         if (!remotePath) continue;
         const content = await this.app.vault.readBinary(file);
         const rev = await this.dbx.upload(remotePath, content);
-        this.syncedRevs.set(file.path, rev);
+        this.syncedRevs.set(file.path.toLowerCase(), rev);
         uploadedFiles.push(file.path);
       }
       const total = updatedFiles.length + uploadedFiles.length + deletedFiles.length;
@@ -296,7 +301,10 @@ ${preview}${more}`, 6e3);
     const timer = setTimeout(() => {
       this.debounceTimers.delete(file.path);
       const name = file.name;
-      this.uploadFile(file).then(() => new import_obsidian2.Notice(`\u2601\uFE0F ${name} \u3092\u30A2\u30C3\u30D7\u30ED\u30FC\u30C9\u3057\u307E\u3057\u305F`)).catch((e) => {
+      this.uploadFile(file).then((rev) => {
+        if (rev) this.syncedRevs.set(file.path.toLowerCase(), rev);
+        new import_obsidian2.Notice(`\u2601\uFE0F ${name} \u3092\u30A2\u30C3\u30D7\u30ED\u30FC\u30C9\u3057\u307E\u3057\u305F`);
+      }).catch((e) => {
         new import_obsidian2.Notice(`CloudSync: \u30A2\u30C3\u30D7\u30ED\u30FC\u30C9\u5931\u6557 (${name}): ${e.message}`);
         console.error(`CloudSync upload error (${file.path}):`, e);
       });
@@ -336,9 +344,9 @@ ${preview}${more}`, 6e3);
   // ────────────────────────────────────────────
   async uploadFile(file) {
     const remotePath = this.toRemotePath(file.path);
-    if (!remotePath) return;
+    if (!remotePath) return null;
     const content = await this.app.vault.readBinary(file);
-    await this.dbx.upload(remotePath, content);
+    return await this.dbx.upload(remotePath, content);
   }
   async appendLog(files) {
     const logPath = "cloudsync-log.md";
