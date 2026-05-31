@@ -257,13 +257,17 @@ var SyncEngine = class {
       if (total === 0) {
         new import_obsidian2.Notice("\u2601\uFE0F \u6700\u65B0\u306E\u72B6\u614B\u3067\u3059");
       } else {
-        const allChanged = [...updatedFiles, ...uploadedFiles, ...deletedFiles];
-        const preview = allChanged.slice(0, 3).map((f) => `\u2022 ${f.split("/").pop()}`).join("\n");
-        const more = allChanged.length > 3 ? `
-\u4ED6 ${allChanged.length - 3} \u4EF6` : "";
+        const logEntries = [
+          ...updatedFiles.map((f) => ({ path: f, action: "\u2193\u53D6\u5F97" })),
+          ...uploadedFiles.map((f) => ({ path: f, action: "\u2191\u9001\u4FE1" })),
+          ...deletedFiles.map((f) => ({ path: f, action: "\u{1F5D1}\u524A\u9664" }))
+        ];
+        const preview = logEntries.slice(0, 3).map((e) => `\u2022 ${e.action} ${e.path.split("/").pop()}`).join("\n");
+        const more = logEntries.length > 3 ? `
+\u4ED6 ${logEntries.length - 3} \u4EF6` : "";
         new import_obsidian2.Notice(`\u2601\uFE0F ${total}\u4EF6\u3092\u540C\u671F\u3057\u307E\u3057\u305F
 ${preview}${more}`, 6e3);
-        await this.appendLog(allChanged);
+        await this.appendLog(logEntries);
       }
       this.startupDone = true;
       this.saveRevs();
@@ -348,12 +352,12 @@ ${preview}${more}`, 6e3);
     const content = await this.app.vault.readBinary(file);
     return await this.dbx.upload(remotePath, content);
   }
-  async appendLog(files) {
+  async appendLog(entries) {
     const logPath = "cloudsync-log.md";
     const now = (/* @__PURE__ */ new Date()).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" });
     const lines = [`
 ## ${now}
-`, ...files.map((f) => `- ${f}`)].join("\n");
+`, ...entries.map((e) => `- ${e.action} ${e.path}`)].join("\n");
     try {
       const existing = await this.app.vault.adapter.exists(logPath) ? await this.app.vault.adapter.read(logPath) : "# CloudSync Log\n";
       await this.app.vault.adapter.write(logPath, existing + lines + "\n");

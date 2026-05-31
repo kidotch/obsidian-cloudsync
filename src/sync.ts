@@ -105,11 +105,15 @@ export class SyncEngine {
 			if (total === 0) {
 				new Notice("☁️ 最新の状態です");
 			} else {
-				const allChanged = [...updatedFiles, ...uploadedFiles, ...deletedFiles];
-				const preview = allChanged.slice(0, 3).map(f => `• ${f.split("/").pop()}`).join("\n");
-				const more = allChanged.length > 3 ? `\n他 ${allChanged.length - 3} 件` : "";
+				const logEntries = [
+					...updatedFiles.map(f => ({ path: f, action: "↓取得" as const })),
+					...uploadedFiles.map(f => ({ path: f, action: "↑送信" as const })),
+					...deletedFiles.map(f => ({ path: f, action: "🗑削除" as const })),
+				];
+				const preview = logEntries.slice(0, 3).map(e => `• ${e.action} ${e.path.split("/").pop()}`).join("\n");
+				const more = logEntries.length > 3 ? `\n他 ${logEntries.length - 3} 件` : "";
 				new Notice(`☁️ ${total}件を同期しました\n${preview}${more}`, 6000);
-				await this.appendLog(allChanged);
+				await this.appendLog(logEntries);
 			}
 			this.startupDone = true;
 			this.saveRevs();
@@ -207,10 +211,10 @@ export class SyncEngine {
 		return await this.dbx.upload(remotePath, content);
 	}
 
-	private async appendLog(files: string[]): Promise<void> {
+	private async appendLog(entries: { path: string; action: "↓取得" | "↑送信" | "🗑削除" }[]): Promise<void> {
 		const logPath = "cloudsync-log.md";
 		const now = new Date().toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" });
-		const lines = [`\n## ${now}\n`, ...files.map(f => `- ${f}`)].join("\n");
+		const lines = [`\n## ${now}\n`, ...entries.map(e => `- ${e.action} ${e.path}`)].join("\n");
 		try {
 			const existing = await this.app.vault.adapter.exists(logPath)
 				? await this.app.vault.adapter.read(logPath) : "# CloudSync Log\n";

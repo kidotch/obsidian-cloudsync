@@ -1,7 +1,7 @@
 {
   "id": "cloudsync",
   "name": "CloudSync",
-  "version": "1.0.25",
+  "version": "1.0.26",
   "minAppVersion": "1.0.0",
   "description": "Dropbox sync: auto pull on startup, auto push on edit",
   "author": "kido",
