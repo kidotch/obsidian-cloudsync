@@ -232,7 +232,6 @@ var SyncEngine = class {
       for (const file of allLocalFiles) {
         if (this.isExcluded(file.path)) continue;
         if (remotePathSet.has(file.path)) continue;
-        if (this.syncedRevs.has(file.path)) continue;
         const remotePath = this.toRemotePath(file.path);
         if (!remotePath) continue;
         const content = await this.app.vault.readBinary(file);

@@ -76,7 +76,6 @@ export class SyncEngine {
 			for (const file of allLocalFiles) {
 				if (this.isExcluded(file.path)) continue;
 				if (remotePathSet.has(file.path)) continue;
-				if (this.syncedRevs.has(file.path)) continue; // 以前同期済み→削除されたもの
 				const remotePath = this.toRemotePath(file.path);
 				if (!remotePath) continue;
 				const content = await this.app.vault.readBinary(file);
